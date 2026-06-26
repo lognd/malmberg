@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv
+.venv/
+uv.lock
+
+# Testing
+.pytest_cache/
+.testmondata
+.coverage
+htmlcov/
+.tox/
+
+# Type checking
+.mypy_cache/
+.ty_cache/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+.claude/
+FROBLEMS.md
+.env

@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "malmberg"
+version = "0.1.0"
+description = "Malmberg core, display, and server."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Logan Dapp", email = "logan@logandapp.com" }
+]
+
+dependencies = [
+    "pydantic>=2.12.0",
+    "python-dotenv>=1.0.0",
+    "typani>=0.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-testmon>=2",
+    "pytest-xdist>=3",
+    "ruff>=0.8",
+    "ty>=0.0.1a8",
+]
+
+[tool.setuptools]
+packages = { find = { where = ["src"] } }
+
+[tool.setuptools.package-data]
+malmberg_core = ["py.typed", "logging/config.toml"]
+malmberg_display = ["py.typed"]
+malmberg_server = ["py.typed"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -n auto"
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks integration tests",
+]
