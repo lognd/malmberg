@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import importlib
 import shutil
-import subprocess
 import sys
 
-from harness import TestContext, TestSkip
+from harness import TestContext
 
 TITLE = "Prerequisites check"
 DEPENDS: list[str] = []
@@ -30,7 +29,7 @@ def run(ctx: TestContext) -> None:
         "uvicorn",
         "httpx",
         "pydantic",
-        "PIL",          # Pillow
+        "PIL",  # Pillow
         "typani",
     ]
     for pkg in py_packages:
@@ -48,7 +47,9 @@ def run(ctx: TestContext) -> None:
             importlib.import_module(pkg)
             log.info("  [ok] %s (optional)", pkg)
         except ImportError:
-            log.warning("  [not installed] %s (optional -- some display tests will skip)", pkg)
+            log.warning(
+                "  [not installed] %s (optional -- some display tests will skip)", pkg
+            )
 
     # System binaries
     bins = ["ffprobe", "ffmpeg"]
@@ -57,10 +58,13 @@ def run(ctx: TestContext) -> None:
         if path:
             log.info("  [ok] %s -> %s", b, path)
         else:
-            log.warning("  [not found] %s (optional -- video metadata tests will skip)", b)
+            log.warning(
+                "  [not found] %s (optional -- video metadata tests will skip)", b
+            )
 
     # Network stack sanity -- can we open a UDP socket?
     import socket
+
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.close()

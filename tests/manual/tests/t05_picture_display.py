@@ -26,6 +26,7 @@ _JPEG_B64 = (
 def _make_test_image(tmp: Path) -> Path:
     """Write a minimal valid JPEG to tmp and return its path."""
     import base64
+
     img_path = tmp / "test_image.jpg"
     img_path.write_bytes(base64.b64decode(_JPEG_B64))
     return img_path
@@ -39,8 +40,6 @@ def run(ctx: TestContext) -> None:
     except ImportError:
         raise TestSkip("pygame not installed")
 
-    from malmberg_core.hal import get_hardware_profile
-
     # Display availability is detected at pygame init time, not a profile flag.
 
     with tempfile.TemporaryDirectory() as _tmp:
@@ -52,7 +51,9 @@ def run(ctx: TestContext) -> None:
         from malmberg_display.display.proto import DisplayContext, LoadContext
 
         load_ctx = LoadContext(cache_dir=tmp)
-        display_ctx = DisplayContext(width=800, height=480, fade_duration_s=0.0, dwell_s=1.5)
+        display_ctx = DisplayContext(
+            width=800, height=480, fade_duration_s=0.0, dwell_s=1.5
+        )
 
         async def _inner() -> None:
             pygame.init()

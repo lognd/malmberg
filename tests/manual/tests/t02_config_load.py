@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from harness import TestContext, TestSkip
+from harness import TestContext
 
 TITLE = "Config loading (defaults)"
 DEPENDS: list[str] = ["t01_prereqs"]
@@ -12,8 +12,8 @@ INTERACTIVE = False
 def run(ctx: TestContext) -> None:
     log = ctx.setup_logger("t02_config_load")
 
-    from malmberg_server.app.config import ServerConfig
     from malmberg_display.app.config import DisplayConfig
+    from malmberg_server.app.config import ServerConfig
 
     scfg = ServerConfig()
     log.info("ServerConfig defaults: port=%d fs_root=%s", scfg.port, scfg.fs_root)

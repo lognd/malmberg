@@ -21,8 +21,7 @@ import time
 from pathlib import Path
 
 import httpx
-
-from harness import TestContext, TestSkip
+from harness import TestContext
 
 TITLE = "Full system E2E: server + display + slideshow"
 DEPENDS: list[str] = ["t09_server_live", "t03_hal_detection"]
@@ -43,8 +42,9 @@ _DSP_PORT = 18446
 
 def _start_server(fs_root: Path) -> None:
     import uvicorn
-    from malmberg_server.app.config import ServerConfig
+
     from malmberg_server.api.routes import build_app
+    from malmberg_server.app.config import ServerConfig
 
     cfg = ServerConfig(port=_SRV_PORT, fs_root=fs_root)
     app = build_app(cfg)
@@ -68,11 +68,9 @@ def _wait_http(url: str, timeout: float = 10.0) -> None:
 def run(ctx: TestContext) -> None:
     log = ctx.setup_logger("t10_e2e_full")
 
-    from malmberg_core.hal import get_hardware_profile
-
-    profile = get_hardware_profile()
     try:
         import pygame as _pygame_check  # noqa: F401
+
         has_pygame = True
     except ImportError:
         has_pygame = False
@@ -109,8 +107,8 @@ def run(ctx: TestContext) -> None:
             log.info("Uploaded item id=%s", item_id)
 
         # Start display app pointing at server
-        from malmberg_display.app.config import DisplayConfig
         from malmberg_display.app.app import DisplayApp
+        from malmberg_display.app.config import DisplayConfig
 
         dcfg = DisplayConfig(
             port=_DSP_PORT,
@@ -166,7 +164,9 @@ def run(ctx: TestContext) -> None:
                 time.sleep(0.5)
 
         if display_error:
-            raise AssertionError(f"Display app crashed: {display_error[0]}") from display_error[0]
+            raise AssertionError(
+                f"Display app crashed: {display_error[0]}"
+            ) from display_error[0]
 
         assert current_id is not None, (
             "Display never reported a current item within 20s. "

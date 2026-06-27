@@ -33,9 +33,7 @@ def run(ctx: TestContext) -> None:
             stop.set()
 
     async def _test() -> None:
-        listen_task = asyncio.create_task(
-            listen_udp(port, _handler, stop_event=stop)
-        )
+        listen_task = asyncio.create_task(listen_udp(port, _handler, stop_event=stop))
         await asyncio.sleep(0.05)
         log.info("Sending broadcast on port %d...", port)
         broadcast_task = asyncio.create_task(

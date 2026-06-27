@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from harness import TestContext, TestSkip
+from harness import TestContext
 
 TITLE = "HAL hardware profile detection"
 DEPENDS: list[str] = ["t01_prereqs"]

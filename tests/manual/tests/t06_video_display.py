@@ -21,9 +21,16 @@ def _make_test_video(dest: Path) -> None:
         raise TestSkip("ffmpeg not found -- cannot generate test video")
     result = subprocess.run(
         [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=3",
-            "-c:v", "libx264", "-t", "3",
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=320x240:d=3",
+            "-c:v",
+            "libx264",
+            "-t",
+            "3",
             str(dest),
         ],
         capture_output=True,
@@ -41,8 +48,6 @@ def run(ctx: TestContext) -> None:
     except ImportError:
         raise TestSkip("mpv Python binding not installed")
 
-    from malmberg_core.hal import get_hardware_profile
-
     # Display availability is detected at runtime by mpv, not a profile flag.
 
     with tempfile.TemporaryDirectory() as _tmp:
@@ -52,11 +57,13 @@ def run(ctx: TestContext) -> None:
         _make_test_video(video_path)
         log.info("Test video: %s (%d bytes)", video_path, video_path.stat().st_size)
 
-        from malmberg_display.display.video import VideoDisplay
         from malmberg_display.display.proto import DisplayContext, LoadContext
+        from malmberg_display.display.video import VideoDisplay
 
         load_ctx = LoadContext(cache_dir=tmp)
-        display_ctx = DisplayContext(width=800, height=480, fade_duration_s=0.0, dwell_s=3.5)
+        display_ctx = DisplayContext(
+            width=800, height=480, fade_duration_s=0.0, dwell_s=3.5
+        )
 
         async def _inner() -> None:
             d = VideoDisplay(video_path)

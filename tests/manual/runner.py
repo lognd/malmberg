@@ -22,15 +22,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
-import logging
-import os
 import sys
 import textwrap
 import traceback
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Optional
 
 # harness must be importable before test modules are loaded
 from harness import TestContext, TestSkip  # noqa: E402 (after sys.path setup)
@@ -138,25 +135,35 @@ def run_tests(stems: list[str], no_interactive: bool) -> int:
         if stem not in mods:
             continue
         title = getattr(mods[stem], "TITLE", stem)
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  {stem}: {title}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         outcome = _run_one(stem, ctx, results, mods)
         results[stem] = outcome
 
     # Summary table
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     col = max(len(s) for s in stems) if stems else 10
     for stem in stems:
         outcome = results.get(stem, "?")
         title = getattr(mods.get(stem, object()), "TITLE", stem)  # type: ignore[arg-type]
-        marker = {"PASS": "[PASS]", "FAIL": "[FAIL]", "SKIP": "[SKIP]", "DEP_FAIL": "[SKIP]"}.get(outcome, "[????]")
+        marker = {
+            "PASS": "[PASS]",
+            "FAIL": "[FAIL]",
+            "SKIP": "[SKIP]",
+            "DEP_FAIL": "[SKIP]",
+        }.get(outcome, "[????]")
         print(f"  {marker}  {stem:<{col}}  {title}")
 
-    counts = {k: sum(1 for v in results.values() if v == k) for k in (_PASS, _FAIL, _SKIP, _DEP_FAIL)}
-    print(f"\n  Passed: {counts[_PASS]}  Failed: {counts[_FAIL]}  Skipped: {counts[_SKIP] + counts[_DEP_FAIL]}")
+    counts = {
+        k: sum(1 for v in results.values() if v == k)
+        for k in (_PASS, _FAIL, _SKIP, _DEP_FAIL)
+    }
+    print(
+        f"\n  Passed: {counts[_PASS]}  Failed: {counts[_FAIL]}  Skipped: {counts[_SKIP] + counts[_DEP_FAIL]}"
+    )
 
     _print_log_digest(log_dir, stems)
     print(f"\nFull logs: {log_dir}\n")
@@ -173,14 +180,16 @@ def _print_log_digest(log_dir: Path, stems: list[str]) -> None:
             continue
         lines = [
             line.rstrip()
-            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in log_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
             if " WARNING  " in line or " ERROR    " in line or " CRITICAL " in line
         ]
         if lines:
             if not found_any:
-                print(f"\n{'='*60}")
+                print(f"\n{'=' * 60}")
                 print("  LOG DIGEST (WARNING/ERROR lines)")
-                print(f"{'='*60}")
+                print(f"{'=' * 60}")
                 found_any = True
             print(f"\n  -- {stem} --")
             for line in lines:
@@ -211,9 +220,13 @@ def main() -> None:
             """
         ),
     )
-    parser.add_argument("--list", action="store_true", help="List available tests and exit")
+    parser.add_argument(
+        "--list", action="store_true", help="List available tests and exit"
+    )
     parser.add_argument("--all", action="store_true", help="Run all tests in order")
-    parser.add_argument("--test", nargs="+", metavar="STEM", help="Run specific tests by stem name")
+    parser.add_argument(
+        "--test", nargs="+", metavar="STEM", help="Run specific tests by stem name"
+    )
     parser.add_argument(
         "--no-interactive",
         action="store_true",

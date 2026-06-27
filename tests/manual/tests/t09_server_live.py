@@ -10,8 +10,7 @@ import time
 from pathlib import Path
 
 import httpx
-
-from harness import TestContext, TestSkip
+from harness import TestContext
 
 TITLE = "Server app: start, upload, list, fetch"
 DEPENDS: list[str] = ["t02_config_load"]
@@ -33,8 +32,9 @@ _SERVER_PORT = 18444
 def _start_server(fs_root: Path) -> threading.Thread:
     """Run the server in a background thread; returns after uvicorn is up."""
     import uvicorn
-    from malmberg_server.app.config import ServerConfig
+
     from malmberg_server.api.routes import build_app
+    from malmberg_server.app.config import ServerConfig
 
     cfg = ServerConfig(port=_SERVER_PORT, fs_root=fs_root)
     app = build_app(cfg)
@@ -105,6 +105,8 @@ def run(ctx: TestContext) -> None:
 
             # Confirm deleted
             r = client.get(f"/media/{item_id}")
-            assert r.status_code == 404, f"Expected 404 after delete, got {r.status_code}"
+            assert r.status_code == 404, (
+                f"Expected 404 after delete, got {r.status_code}"
+            )
 
     log.info("Server live test OK.")

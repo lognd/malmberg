@@ -86,6 +86,9 @@ testpaths = ["tests/unit", "tests/integration", "tests/system"]
 addopts = "-q -n auto"
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore:Using.*httpx.*starlette",
+]
 markers = [
     "slow: marks tests as slow",
     "integration: marks integration tests",

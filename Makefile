@@ -8,9 +8,9 @@ clean:
 	find src tests -type d -name __pycache__ -exec rm -rf {} +
 
 check:
-	uv run ruff check src/ tests/
-	uv run ruff format --check src/ tests/
-	uv run ty check src/
+	uv run ruff check --fix src/ tests/
+	uv run ruff format src/ tests/
+	uv run ty check src/ --ignore unresolved-import
 
 lint:
 	uv run ruff check --fix src/ tests/

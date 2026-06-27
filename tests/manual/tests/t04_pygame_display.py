@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-
 from harness import TestContext, TestSkip
 
 TITLE = "pygame window open + colour fill"
@@ -19,9 +17,6 @@ def run(ctx: TestContext) -> None:
     except ImportError:
         raise TestSkip("pygame not installed")
 
-    from malmberg_core.hal import get_hardware_profile
-
-    profile = get_hardware_profile()
     # has_display is not a profile field; we just try pygame.display.Info()
     # and let pygame tell us if no screen is available.
 
@@ -35,6 +30,7 @@ def run(ctx: TestContext) -> None:
         log.info("Green window should be visible on screen for ~2 seconds.")
 
         import time
+
         time.sleep(2)
 
         # Check for quit events so the window is responsive
