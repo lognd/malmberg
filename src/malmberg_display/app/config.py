@@ -42,6 +42,16 @@ class DisplayConfig(BaseModel):
     """UDP port used for automatic server discovery broadcasts."""
     history_len: int = 32
     """Number of recently displayed items kept for backward navigation."""
+    show_clock: bool = True
+    """Render the current-time clock overlay on images."""
+    show_caption: bool = True
+    """Render the date/location/camera caption overlay on images."""
+    clock_position: str = "top-right"
+    """Where to render the clock: top-right, top-left, bottom-right, bottom-left."""
+    overlay_font_size: int = 36
+    """Primary font size (px) for caption date and clock text."""
+    overlay_scrim_alpha: int = 140
+    """Opacity of the dark scrim behind overlay text (0=transparent, 255=opaque)."""
 
     @field_validator("dwell_s")
     @classmethod

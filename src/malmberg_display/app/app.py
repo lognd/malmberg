@@ -14,6 +14,11 @@ from malmberg_core.hal import get_hardware_profile
 from malmberg_core.logging import get_logger
 from malmberg_core.networking import listen_udp, parse_broadcast
 from malmberg_display.app.config import DisplayConfig
+from malmberg_display.display.overlay import (
+    OverlayConfig,
+    OverlayRenderer,
+    make_geocoder,
+)
 from malmberg_display.display.proto import DisplayContext, LoadContext
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.directory import load_flat_from_directory
@@ -52,12 +57,28 @@ class DisplayApp:
 
     async def _run(self) -> None:
         cache_dir = self._cfg.cache_dir.expanduser()
-        load_ctx = LoadContext(cache_dir=cache_dir)
+
+        overlay_cfg = OverlayConfig(
+            show_clock=self._cfg.show_clock,
+            show_caption=self._cfg.show_caption,
+            clock_position=self._cfg.clock_position,
+            font_size_primary=self._cfg.overlay_font_size,
+            font_size_secondary=max(16, self._cfg.overlay_font_size - 12),
+            font_size_clock=self._cfg.overlay_font_size + 12,
+            scrim_alpha=self._cfg.overlay_scrim_alpha,
+        )
+        overlay_renderer = OverlayRenderer(overlay_cfg)
+        geocoder = make_geocoder()
+
+        load_ctx = LoadContext(cache_dir=cache_dir, geocoder=geocoder)
         display_ctx = DisplayContext(
             width=self._cfg.width,
             height=self._cfg.height,
             fade_duration_s=self._cfg.fade_duration_s,
             dwell_s=self._cfg.dwell_s,
+            show_clock=self._cfg.show_clock,
+            show_caption=self._cfg.show_caption,
+            overlay_renderer=overlay_renderer,
         )
 
         async with httpx.AsyncClient() as client:

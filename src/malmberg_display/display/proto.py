@@ -16,6 +16,8 @@ class LoadContext(BaseModel):
 
     cache_dir: Path = Path("/tmp/malmberg-cache")
     """Directory for caching downloaded or transcoded media."""
+    geocoder: Optional[Any] = None
+    """Optional (lat, lon) -> str callable for reverse-geocoding GPS coordinates."""
 
 
 class DisplayContext(BaseModel):
@@ -31,12 +33,18 @@ class DisplayContext(BaseModel):
     """pygame.Surface or None if not yet initialized."""
     mpv_player: Optional[Any] = None
     """mpv.MPV instance or None if not yet initialized."""
+    overlay_renderer: Optional[Any] = None
+    """OverlayRenderer instance or None to disable overlays."""
     width: int = 1920
     height: int = 1080
     fade_duration_s: float = 0.5
     """Cross-fade duration between items."""
     dwell_s: float = 10.0
     """Default time to display each image."""
+    show_clock: bool = True
+    """Render the current-time clock overlay."""
+    show_caption: bool = True
+    """Render the per-image date/location/camera caption overlay."""
 
 
 class Displayable(ABC):

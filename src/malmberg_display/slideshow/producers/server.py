@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
@@ -16,11 +17,26 @@ _VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
 class CachedItem(Displayable):
-    """A Displayable that wraps an already-downloaded local file."""
+    """A Displayable that wraps an already-downloaded local file plus EXIF metadata."""
 
-    def __init__(self, path: Path, item_id: str) -> None:
+    def __init__(
+        self,
+        path: Path,
+        item_id: str,
+        *,
+        taken_at: Optional[datetime] = None,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        camera_model: Optional[str] = None,
+        dwell_override_s: Optional[float] = None,
+    ) -> None:
         self._path = path
         self._id = item_id
+        self._taken_at = taken_at
+        self._lat = lat
+        self._lon = lon
+        self._camera_model = camera_model
+        self._dwell_override_s = dwell_override_s
         self._delegate: Optional["Displayable"] = None
 
     @property
@@ -37,7 +53,14 @@ class CachedItem(Displayable):
         else:
             from malmberg_display.display.picture import PictureDisplay
 
-            d = PictureDisplay(self._path)
+            d = PictureDisplay(
+                self._path,
+                taken_at=self._taken_at,
+                lat=self._lat,
+                lon=self._lon,
+                camera_model=self._camera_model,
+                dwell_override_s=self._dwell_override_s,
+            )
         await d.load(ctx)
         self._delegate = d
 
@@ -90,7 +113,24 @@ class ServerProducer:
                     ok = await self._download(item_id, filename, cached)
                     if not ok:
                         continue
-                yield CachedItem(cached, item_id)
+
+                meta = raw.get("meta") or {}
+                taken_at: Optional[datetime] = None
+                if ts := meta.get("taken_at"):
+                    try:
+                        taken_at = datetime.fromisoformat(ts)
+                    except ValueError:
+                        pass
+
+                yield CachedItem(
+                    cached,
+                    item_id,
+                    taken_at=taken_at,
+                    lat=meta.get("lat"),
+                    lon=meta.get("lon"),
+                    camera_model=meta.get("camera_model"),
+                    dwell_override_s=raw.get("dwell_override_s"),
+                )
 
             if not data.get("has_next", False):
                 break
