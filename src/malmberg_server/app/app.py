@@ -36,9 +36,16 @@ class ServerApp:
         self._ensure_dirs()
 
         from malmberg_server.api.routes import build_app  # local to break cycle
+        from malmberg_server.ingest.store import MediaStore
+
+        store = MediaStore()
+        index = self._cfg.fs_root / "logs" / "media-index.jsonl"
+        result = store.load_from_disk(index)
+        if result.is_err:
+            _log.warning("Could not load media index from disk; starting empty")
 
         uvi_cfg = uvicorn.Config(
-            build_app(self._cfg),
+            build_app(self._cfg, store),
             host=self._cfg.host,
             port=self._cfg.port,
             ssl_keyfile=None,

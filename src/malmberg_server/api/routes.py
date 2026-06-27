@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,34 +13,19 @@ from pydantic import BaseModel
 
 from malmberg_core import __version__
 from malmberg_core.logging import get_logger
-from malmberg_core.models import HidePolicy, MediaItem, MediaMetadata, MediaPage, Tag
+from malmberg_core.models import HidePolicy, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_server.app.config import ServerConfig
+from malmberg_server.ingest.errors import IngestError
+from malmberg_server.ingest.store import MediaStore
+from malmberg_server.ingest.upload import handle_upload
 
 _log = get_logger(__name__)
 
-_MEDIA_EXTS = frozenset(
-    {
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".heic",
-        ".webp",
-        ".heif",
-        ".avif",
-        ".tiff",
-        ".mp4",
-        ".mkv",
-        ".mov",
-        ".m4v",
-        ".avi",
-        ".wmv",
-        ".webm",
-    }
-)
-
 
 class ServerStatus(BaseModel):
+    """Response body for GET /status."""
+
     version: str
     uptime_s: float
     disk_used_bytes: int
@@ -57,13 +41,30 @@ class MediaPatch(BaseModel):
     tags: Optional[list[str]] = None
 
 
-def build_app(cfg: ServerConfig) -> FastAPI:
-    """Build and return the FastAPI application wired to *cfg*."""
+_INGEST_ERRORS = {
+    IngestError.FileTooLarge: (413, "File exceeds maximum upload size"),
+    IngestError.DuplicateFile: (409, "A file with this content already exists"),
+    IngestError.ExifError: (422, "Could not process file metadata"),
+    IngestError.IOError: (500, "I/O error during upload"),
+    IngestError.StorageError: (500, "Media store error"),
+    IngestError.NotFound: (404, "Media item not found"),
+}
+
+
+def _raise_ingest(err: IngestError) -> None:
+    status, detail = _INGEST_ERRORS.get(err, (500, str(err)))
+    raise HTTPException(status_code=status, detail=detail)
+
+
+def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
+    """Build and return the FastAPI application wired to *cfg* and *store*.
+
+    If *store* is None a new empty MediaStore is created.  Pass an existing
+    store (e.g. pre-loaded from disk) when resuming across restarts.
+    """
     app = FastAPI(title="Malmberg Server", version=__version__)
     _start = datetime.now(timezone.utc)
-
-    # In-memory media index for now; a persistent store is a future milestone.
-    _media: dict[str, MediaItem] = {}
+    _store = store if store is not None else MediaStore()
 
     def _media_root() -> Path:
         return cfg.fs_root / "media"
@@ -73,6 +74,9 @@ def build_app(cfg: ServerConfig) -> FastAPI:
 
     def _trash_root() -> Path:
         return cfg.fs_root / ".trash"
+
+    def _index_path() -> Path:
+        return cfg.fs_root / "logs" / "media-index.jsonl"
 
     @app.get("/")
     async def root() -> Tag:
@@ -101,21 +105,11 @@ def build_app(cfg: ServerConfig) -> FastAPI:
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=500),
     ) -> MediaPage:
-        all_items = [it for it in _media.values() if not it.do_not_display]
-        total = len(all_items)
-        start = (page - 1) * page_size
-        chunk = all_items[start : start + page_size]
-        return MediaPage(
-            items=chunk,
-            total=total,
-            page=page,
-            page_size=page_size,
-            has_next=(start + page_size) < total,
-        )
+        return _store.list(page=page, page_size=page_size, skip_hidden=True)
 
     @app.get("/media/{item_id}")
     async def get_media(item_id: str) -> FileResponse:
-        item = _media.get(item_id)
+        item = _store.get(item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Media item not found")
         path = _media_root() / item.server_path
@@ -124,70 +118,37 @@ def build_app(cfg: ServerConfig) -> FastAPI:
         return FileResponse(str(path))
 
     @app.post("/upload")
-    async def upload(file: UploadFile = File(...)) -> MediaItem:
+    async def upload(file: UploadFile = File(...)) -> dict:
         if file.filename is None:
             raise HTTPException(status_code=400, detail="filename required")
-        if (cfg.max_upload_mb * 1024 * 1024) < 0:
-            pass  # validated by config
-
-        upload_path = _upload_root() / (file.filename or "upload")
-        sha = hashlib.sha256()
-
-        with open(upload_path, "wb") as dest:
-            while chunk := await file.read(65536):
-                sha.update(chunk)
-                dest.write(chunk)
-
-        digest = sha.hexdigest()
-        now = datetime.now(timezone.utc)
-        rel_path = f"{now.year}/{now.month:02d}/{now.day:02d}/{file.filename}"
-        final_path = _media_root() / rel_path
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        upload_path.rename(final_path)
-
-        kind = (
-            "video"
-            if Path(file.filename).suffix.lower()
-            in {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".wmv", ".webm"}
-            else "image"
+        result = await handle_upload(
+            file=file,
+            store=_store,
+            media_root=_media_root(),
+            upload_root=_upload_root(),
+            max_bytes=cfg.max_upload_mb * 1024 * 1024,
         )
-        item = MediaItem(
-            kind=kind,
-            filename=file.filename,
-            server_path=rel_path,
-            meta=MediaMetadata(sha256=digest),
-        )
-        _media[item.id] = item
-        _log.info("Ingested %s -> %s", file.filename, rel_path)
-        return item
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+        item = result.danger_ok
+        _store.save_to_disk(_index_path())
+        return item.model_dump()
 
     @app.patch("/media/{item_id}")
-    async def patch_media(item_id: str, patch: MediaPatch) -> MediaItem:
-        item = _media.get(item_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail="Media item not found")
+    async def patch_media(item_id: str, patch: MediaPatch) -> dict:
         updates = patch.model_dump(exclude_none=True)
-        _media[item_id] = item.model_copy(update=updates)
-        return _media[item_id]
+        result = _store.patch(item_id, updates)
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+        _store.save_to_disk(_index_path())
+        return result.danger_ok.model_dump()
 
     @app.delete("/media/{item_id}")
     async def delete_media(item_id: str) -> dict[str, str]:
-        item = _media.get(item_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail="Media item not found")
-
-        path = _media_root() / item.server_path
-        if item.hide_policy == "delete":
-            if path.is_file():
-                trash_path = _trash_root() / item.server_path
-                trash_path.parent.mkdir(parents=True, exist_ok=True)
-                path.rename(trash_path)
-            del _media[item_id]
-            _log.info("Trashed %s", item_id)
-            return {"status": "trashed", "id": item_id}
-        else:
-            _media[item_id] = item.model_copy(update={"do_not_display": True})
-            _log.info("Hidden (kept) %s", item_id)
-            return {"status": "hidden", "id": item_id}
+        result = _store.delete(item_id, _trash_root(), _media_root())
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+        _store.save_to_disk(_index_path())
+        return result.danger_ok
 
     return app
