@@ -4,7 +4,7 @@ build:
 	uv sync --dev
 
 clean:
-	rm -rf dist/ build/ .pytest_cache/ .testmondata .coverage htmlcov/
+	rm -rf dist/ build/ .pytest_cache/ .testmondata .coverage htmlcov/ tests/manual/logs/
 	find src tests -type d -name __pycache__ -exec rm -rf {} +
 
 check:
