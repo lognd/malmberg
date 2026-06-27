@@ -5,12 +5,23 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "malmberg"
 version = "0.1.0"
-description = "Malmberg core, display, and server."
+description = "Self-hosted photo and video display system for the home."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [
     { name = "Logan Dapp", email = "logan@logandapp.com" }
+]
+keywords = ["photo", "display", "raspberry-pi", "self-hosted", "slideshow"]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "Topic :: Home Automation",
 ]
 
 dependencies = [
