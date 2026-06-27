@@ -265,10 +265,52 @@ from malmberg_display.display.proto import Displayable, LoadContext, DisplayCont
 - `Displayable` -- abstract base class. Subclasses implement `async load(ctx:
   LoadContext)` (called once, in the producer task) and `async display(ctx:
   DisplayContext)` (called in the display task, blocks for dwell duration).
-- `LoadContext` -- holds `cache_dir` (Path) and optionally initialized pygame and
-  mpv resources shared across items.
-- `DisplayContext` -- holds `screen`, `mpv_player`, `width`, `height`,
-  `fade_duration_s`, `dwell_s`.
+- `LoadContext` -- shared across all `load()` calls within a session.
+  - `cache_dir: Path` -- where to store downloaded / transcoded media.
+  - `geocoder: Optional[Callable]` -- optional `(lat, lon) -> str | None` for
+    reverse-geocoding GPS coordinates into a human-readable place name.
+- `DisplayContext` -- shared across all `display()` calls within a session.
+  - `screen` -- pygame `Surface` or `None` if not yet initialised.
+  - `mpv_player` -- mpv `MPV` instance or `None`.
+  - `overlay_renderer` -- `OverlayRenderer` instance or `None` to disable overlays.
+  - `width`, `height` -- display resolution in pixels.
+  - `fade_duration_s` -- cross-fade duration between items.
+  - `dwell_s` -- default time to show each image.
+  - `show_clock`, `show_caption` -- overlay toggle flags.
+
+### `malmberg_display.display.overlay`
+
+```python
+from malmberg_display.display.overlay import (
+    OverlayConfig,
+    OverlayRenderer,
+    ImageCaption,
+    make_geocoder,
+    clock_tick_loop,
+)
+```
+
+Renders two overlay regions onto any pygame surface without requiring knowledge of
+the image content:
+
+- `OverlayConfig` -- dataclass-style config: `show_clock`, `show_caption`,
+  `clock_position`, `font_size_primary`, `font_size_secondary`, `font_size_clock`,
+  `scrim_alpha`, `margin`, `line_spacing`.
+- `ImageCaption` -- per-image metadata holder: `date_label`, `location_label`,
+  `camera_label`. Build with `ImageCaption.from_metadata(taken_at, lat, lon,
+  camera_model, geocoder=...)`.
+- `OverlayRenderer(cfg)` -- call `render(surface, w, h, caption)` to draw both
+  regions at once, or `render_clock` / `render_caption` individually.
+- `make_geocoder(cache_dir=None) -> Callable | None` -- returns a `(lat, lon) -> str`
+  function backed by Nominatim if `geopy` is installed; returns `None` otherwise.
+  Callers fall back to decimal coordinates when `None` is returned.
+- `clock_tick_loop(surface, renderer, width, height, interval_s=30)` -- background
+  coroutine that re-renders the clock region every `interval_s` seconds so the time
+  stays accurate during long-dwell images.
+
+Font selection: tries Ubuntu, DejaVu Sans, Liberation Sans, FreeSans, Arial,
+Helvetica in that order, then falls back to pygame's built-in bitmap font. Fonts are
+cached after the first call to `_get_font`.
 
 ### `malmberg_display.display.picture`
 
@@ -276,8 +318,23 @@ from malmberg_display.display.proto import Displayable, LoadContext, DisplayCont
 from malmberg_display.display.picture import PictureDisplay
 ```
 
-Implements `Displayable` for images. Uses Pillow to decode (in an executor, off the
-event loop) and pygame to render with a cross-fade transition. Importing this module
+Implements `Displayable` for images. Uses Pillow to decode (in a thread executor,
+off the event loop) and pygame to blit with an optional cross-fade transition.
+
+```python
+PictureDisplay(
+    path,
+    taken_at=datetime(...),   # from EXIF; shown in caption
+    lat=30.27,
+    lon=-97.74,               # GPS; reverse-geocoded via ctx.geocoder
+    camera_model="iPhone 15 Pro",
+    dwell_override_s=15.0,    # overrides DisplayContext.dwell_s for this item
+)
+```
+
+After blitting, `display()` calls `ctx.overlay_renderer.render()` if one is set,
+then flips the display and sleeps for the dwell duration. Cross-fade is a
+frame-by-frame alpha blend at ~30 fps over `fade_duration_s`. Importing this module
 requires `pygame` and `Pillow` to be installed.
 
 ### `malmberg_display.display.video`
@@ -354,9 +411,12 @@ from malmberg_display.slideshow.producers import (
 - `CacheProducer(cache_dir)` -- sync generator. `items()` reads `cache-index.json`
   if present; otherwise scans `cache_dir/` for subdirectories. Used in offline
   mode. `write_index(items)` persists an index for fast future loads.
-- `CachedItem(path, item_id)` -- `Displayable` wrapping a local file. `load()`
-  defers import of `PictureDisplay` or `VideoDisplay` based on file extension
-  (avoiding transitive pygame/mpv imports at collection time).
+- `CachedItem(path, item_id, *, taken_at, lat, lon, camera_model, dwell_override_s)`
+  -- `Displayable` wrapping a local cached file. `load()` defers import of
+  `PictureDisplay` or `VideoDisplay` based on file extension (avoiding transitive
+  pygame/mpv imports at collection time). EXIF kwargs are forwarded to
+  `PictureDisplay` so the overlay receives metadata without extra lookups.
+  `ServerProducer` populates these from the `GET /media` response.
 
 ---
 

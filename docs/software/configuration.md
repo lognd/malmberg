@@ -70,6 +70,11 @@ Config file: `~/.config/malmberg/display.toml` (or the path passed to `--config`
 | `server_url` | str \| null | `null` | `MALMBERG_SERVER_URL` | Explicit server base URL (e.g. `http://192.168.1.10:8444`); skips UDP discovery when set |
 | `discovery_port` | int | `9456` | -- | UDP port used for automatic server discovery broadcasts |
 | `history_len` | int | `32` | -- | Number of recently displayed items to keep for backward navigation |
+| `show_clock` | bool | `true` | -- | Render the current-time clock overlay on images |
+| `show_caption` | bool | `true` | -- | Render the date/location/camera caption overlay on images |
+| `clock_position` | str | `"top-right"` | -- | Clock placement: `top-right`, `top-left`, `bottom-right`, `bottom-left` |
+| `overlay_font_size` | int | `36` | -- | Primary font size in pixels for caption date and clock text |
+| `overlay_scrim_alpha` | int | `140` | -- | Opacity of the dark scrim behind overlay text (0 = transparent, 255 = opaque) |
 
 **Media source priority:** if `media_dir` is set, it is used exclusively (no server
 connection). If `server_url` is set, the display connects directly to that URL and
@@ -79,6 +84,13 @@ falls back to the offline cache while waiting.
 `web_overlays` requires the `[web-overlays]` pip extra and `playwright_supported=true`
 in the hardware profile. On hardware that does not support it the flag is ignored.
 
+**On-screen overlays** render on top of every image. The clock shows current local
+time; the caption shows three lines: date taken (large, off-white), reverse-geocoded
+location (medium grey), and camera model (small grey). Both sit on a semi-transparent
+dark scrim sized to the text. If `geopy` is not installed, GPS coordinates are shown
+as decimal degrees instead of a place name. Overlays are skipped entirely for video
+items.
+
 **Example `display.toml`:**
 
 ```toml
@@ -87,6 +99,13 @@ fade_duration_s = 1.0
 width = 1920
 height = 1080
 server_url = "http://192.168.1.10:8444"
+
+# overlay
+show_clock = true
+show_caption = true
+clock_position = "top-right"
+overlay_font_size = 36
+overlay_scrim_alpha = 140
 ```
 
 ---
