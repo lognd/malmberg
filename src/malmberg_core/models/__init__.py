@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from malmberg_core.models.discovery import DiscoveryPayload
 from malmberg_core.models.id import Tag
 from malmberg_core.models.media import (
     HidePolicy,
@@ -11,6 +12,7 @@ from malmberg_core.models.media import (
 )
 
 __all__ = [
+    "DiscoveryPayload",
     "HidePolicy",
     "MediaItem",
     "MediaMetadata",
