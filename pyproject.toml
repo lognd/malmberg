@@ -7,20 +7,24 @@ name = "malmberg"
 version = "0.1.0"
 description = "Malmberg core, display, and server."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "Logan Dapp", email = "logan@logandapp.com" }
 ]
 
 dependencies = [
+    "fastapi>=0.138.1",
     "pydantic>=2.12.0",
     "python-dotenv>=1.0.0",
     "typani>=0.0.3",
+    "typing_extensions>=4.0; python_version < '3.11'",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [dependency-groups]
 dev = [
+    "pip>=26.1.2",
     "pytest>=8",
     "pytest-testmon>=2",
     "pytest-xdist>=3",
@@ -38,7 +42,7 @@ malmberg_server = ["py.typed"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
