@@ -1,4 +1,4 @@
-.PHONY: build clean check test lint fmt release
+.PHONY: build clean check test lint fmt release map
 
 build:
 	uv sync --dev
@@ -20,6 +20,9 @@ test:
 	uv run pytest
 
 fmt: lint
+
+map:
+	uv run python -m frob map src/
 
 release: check test
 	uv run python scripts/release.py
