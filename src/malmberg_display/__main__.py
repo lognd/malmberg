@@ -14,6 +14,9 @@ if __name__ == "__main__":
     parser.add_argument("--host", metavar="HOST", help="Bind host")
     parser.add_argument("--port", metavar="PORT", type=int, help="Bind port")
     parser.add_argument("--media-dir", metavar="DIR", help="Local media directory")
+    parser.add_argument(
+        "--server-url", metavar="URL", help="Explicit server base URL (skips discovery)"
+    )
     args = parser.parse_args()
 
     cfg_path = (

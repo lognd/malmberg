@@ -36,6 +36,10 @@ class DisplayConfig(BaseModel):
     height: int = 1080
     media_dir: Optional[Path] = None
     """If set, use a local directory as the media source instead of a server."""
+    server_url: Optional[str] = None
+    """Explicit server base URL (e.g. http://192.168.1.10:8444). Skips UDP discovery."""
+    discovery_port: int = 9456
+    """UDP port used for automatic server discovery broadcasts."""
 
     @field_validator("dwell_s")
     @classmethod
@@ -62,6 +66,8 @@ class DisplayConfig(BaseModel):
             result["config_path"] = Path(args.config)
         if getattr(args, "media_dir", None):
             result["media_dir"] = Path(args.media_dir)
+        if getattr(args, "server_url", None):
+            result["server_url"] = args.server_url
         return result
 
     @staticmethod
@@ -75,6 +81,8 @@ class DisplayConfig(BaseModel):
             result["dwell_s"] = float(v)
         if v := os.environ.get("MALMBERG_WEB_OVERLAYS"):
             result["web_overlays"] = v.lower() in ("1", "true", "yes")
+        if v := os.environ.get("MALMBERG_SERVER_URL"):
+            result["server_url"] = v
         return result
 
     @classmethod

@@ -23,6 +23,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "typing_extensions>=4.0; python_version < '3.11'",
     "tomli>=2.0; python_version < '3.11'",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -81,7 +82,7 @@ select = ["E", "F", "W", "I"]
 
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit", "tests/integration", "tests/system"]
 addopts = "-q -n auto"
 pythonpath = ["src"]
 asyncio_mode = "auto"
