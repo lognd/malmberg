@@ -36,10 +36,36 @@ cd malmberg
 uv sync
 ```
 
-On the **display** machine, also install the display extras (pygame, Pillow, mpv):
+`uv sync` installs all base dependencies (FastAPI, uvicorn, Pillow, httpx, pydantic,
+typani, and tomli on Python < 3.11) into a local `.venv/`.  You do not need to
+activate the virtualenv; `uv run` handles it automatically.
+
+**Display machine** — also install the hardware rendering extras:
 
 ```bash
-uv sync --extra display
+uv sync --extra display       # pygame, python-mpv
+```
+
+**Optional extras** (install only what you need):
+
+| Extra | Installs | When to use |
+|---|---|---|
+| `--extra display` | pygame, python-mpv | Any display machine |
+| `--extra web-overlays` | playwright + Chromium | Clock/weather overlays (Pi 4/5 only) |
+| `--extra cloud-icloud` | pyicloud | iCloud sync |
+| `--extra cloud-googlephotos` | google-auth | Google Photos sync |
+| `--extra all` | everything above | Development / testing |
+
+Example — server with Google Photos sync:
+
+```bash
+uv sync --extra cloud-googlephotos
+```
+
+Example — display with all rendering options:
+
+```bash
+uv sync --extra display --extra web-overlays
 ```
 
 ---
