@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Generator, Iterator, Optional
+from typing import AsyncIterator, Iterator, Optional, Union, cast
 
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
+
+ProducerType = Union[Iterator[Displayable], AsyncIterator[Displayable]]
 
 
 class Slideshow:
     """Manages a produce/display pipeline for a stream of Displayable items.
 
     Two asyncio coroutines run concurrently:
-    - ``produce_target``: calls next(producer), awaits item.load(), enqueues.
+    - ``produce_target``: calls next(producer) or __anext__(producer), awaits
+      item.load(), enqueues.
     - ``display_target``: dequeues and awaits item.display().
+
+    Both sync generators (local directory) and async generators (ServerProducer)
+    are accepted; produce_target detects which protocol to use via __anext__.
 
     History (last 32 items shown) is maintained for backward navigation.
     The active producer can be swapped at runtime via ``set_producer``.
@@ -22,21 +28,22 @@ class Slideshow:
 
     def __init__(
         self,
-        producer: Generator[Displayable, None, None],
+        producer: ProducerType,
         load_ctx: LoadContext,
         display_ctx: DisplayContext,
         *,
         max_preload: int = 4,
+        history_len: int = 32,
     ) -> None:
-        self._producer: Iterator[Displayable] = producer
+        self._producer: ProducerType = producer
         self._load_ctx = load_ctx
         self._display_ctx = display_ctx
         self._queue: asyncio.Queue[Displayable] = asyncio.Queue(maxsize=max_preload)
-        self._history: deque[Displayable] = deque(maxlen=32)
+        self._history: deque[Displayable] = deque(maxlen=history_len)
         self._paused = False
         self._current: Optional[Displayable] = None
 
-    def set_producer(self, producer: Iterator[Displayable]) -> None:
+    def set_producer(self, producer: ProducerType) -> None:
         """Hot-swap the active producer; takes effect on the next produce cycle."""
         self._producer = producer
 
@@ -71,8 +78,12 @@ class Slideshow:
         """Continuously pre-load the next item and enqueue it."""
         while True:
             try:
-                item = next(self._producer)
-            except StopIteration:
+                p = self._producer
+                if hasattr(p, "__anext__"):
+                    item = await cast(AsyncIterator[Displayable], p).__anext__()
+                else:
+                    item = next(cast(Iterator[Displayable], p))
+            except (StopIteration, StopAsyncIteration):
                 await asyncio.sleep(0.1)
                 continue
             await item.load(self._load_ctx)

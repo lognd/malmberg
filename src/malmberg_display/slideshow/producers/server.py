@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional
 
 import httpx
 
 from malmberg_core.logging import get_logger
-from malmberg_display.display.proto import DisplayContext, LoadContext
-
-if TYPE_CHECKING:
-    from malmberg_display.display.proto import Displayable
+from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
 
 _log = get_logger(__name__)
 
 _VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
-class CachedItem:
+class CachedItem(Displayable):
     """A Displayable that wraps an already-downloaded local file."""
 
     def __init__(self, path: Path, item_id: str) -> None:

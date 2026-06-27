@@ -131,7 +131,9 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         if result.is_err:
             _raise_ingest(result.danger_err)
         item = result.danger_ok
-        _store.save_to_disk(_index_path())
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after upload")
         return item.model_dump()
 
     @app.patch("/media/{item_id}")
@@ -140,7 +142,9 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         result = _store.patch(item_id, updates)
         if result.is_err:
             _raise_ingest(result.danger_err)
-        _store.save_to_disk(_index_path())
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after patch")
         return result.danger_ok.model_dump()
 
     @app.delete("/media/{item_id}")
@@ -148,7 +152,9 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         result = _store.delete(item_id, _trash_root(), _media_root())
         if result.is_err:
             _raise_ingest(result.danger_err)
-        _store.save_to_disk(_index_path())
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after delete")
         return result.danger_ok
 
     return app

@@ -43,9 +43,9 @@ class WebDisplay(Displayable):
     async def display(self, ctx: DisplayContext) -> None:
         """Composite the screenshot on top of the current pygame screen."""
         if self._screenshot is None:
-            await self.load(ctx)
+            await self.load(LoadContext())
 
-        if ctx.screen is None:
+        if ctx.screen is None or self._screenshot is None:
             return
 
         surf = pygame.image.load(io.BytesIO(self._screenshot))

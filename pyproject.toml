@@ -84,7 +84,7 @@ select = ["E", "F", "W", "I"]
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/integration", "tests/system"]
 addopts = "-q -n auto"
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 asyncio_mode = "auto"
 markers = [
     "slow: marks tests as slow",

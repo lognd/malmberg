@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from malmberg_core.logging import get_logger
+from malmberg_display.display.proto import Displayable
 from malmberg_display.slideshow.producers.server import CachedItem
 
 _log = get_logger(__name__)
@@ -33,7 +34,7 @@ class CacheProducer:
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = cache_dir
 
-    def items(self) -> Generator[CachedItem, None, None]:
+    def items(self) -> Generator[Displayable, None, None]:
         """Yield CachedItems from the cache; logs and skips bad entries."""
         index_path = self._cache_dir / _INDEX_NAME
         if index_path.is_file():

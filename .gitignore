@@ -39,3 +39,6 @@ Thumbs.db
 .claude/
 FROBLEMS.md
 .env
+
+# Manual test runner outputs
+tests/manual/logs/

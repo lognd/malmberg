@@ -36,7 +36,7 @@ class PictureDisplay(Displayable):
     async def display(self, ctx: DisplayContext) -> None:
         """Blit the loaded surface and sleep for the dwell time."""
         if self._surface is None:
-            await self.load(ctx)
+            await self.load(LoadContext())
 
         if ctx.screen is None:
             return

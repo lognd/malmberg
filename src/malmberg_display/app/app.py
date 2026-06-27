@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Generator, Optional
+from typing import Any, Optional
 
 import httpx
 import uvicorn
 from typani.unreachable import Unreachable
 
+from malmberg_core.compat import TaskGroup
 from malmberg_core.hal import get_hardware_profile
 from malmberg_core.logging import get_logger
 from malmberg_core.networking import listen_udp, parse_broadcast
 from malmberg_display.app.config import DisplayConfig
-from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
+from malmberg_display.display.proto import DisplayContext, LoadContext
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.directory import load_flat_from_directory
-from malmberg_display.slideshow.producers.infinite import load_infinite
+from malmberg_display.slideshow.producers.infinite import (
+    async_load_infinite,
+    load_infinite,
+)
 from malmberg_display.slideshow.producers.server import ServerProducer
-from malmberg_display.slideshow.slideshow import Slideshow
+from malmberg_display.slideshow.slideshow import ProducerType, Slideshow
 
 _log = get_logger(__name__)
 
@@ -64,6 +68,7 @@ class DisplayApp:
                 load_ctx=load_ctx,
                 display_ctx=display_ctx,
                 max_preload=self._profile.max_preload_queue,
+                history_len=self._cfg.history_len,
             )
 
             from malmberg_display.api.routes import build_app  # local to break cycle
@@ -82,7 +87,7 @@ class DisplayApp:
                 self._cfg.media_dir is None and self._cfg.server_url is None
             )
 
-            async with asyncio.TaskGroup() as tg:
+            async with TaskGroup() as tg:
                 tg.create_task(slideshow.produce_target(), name="produce")
                 tg.create_task(slideshow.display_target(), name="display")
                 tg.create_task(server.serve(), name="api")
@@ -92,7 +97,7 @@ class DisplayApp:
                         name="discovery",
                     )
 
-    def _build_producer(self, cache_dir: Any) -> Generator[Displayable, None, None]:
+    def _build_producer(self, cache_dir: Any) -> ProducerType:
         """Select the initial media producer based on configuration."""
         if self._cfg.media_dir is not None:
             directory = self._cfg.media_dir.expanduser()
@@ -101,9 +106,10 @@ class DisplayApp:
 
         if self._cfg.server_url is not None:
             server_url = self._cfg.server_url
+            assert self._http_client is not None
             client = self._http_client
             _log.info("Using server producer: %s", server_url)
-            return load_infinite(  # type: ignore[arg-type]
+            return async_load_infinite(
                 lambda: ServerProducer(server_url, cache_dir, client).items()
             )
 
@@ -115,6 +121,7 @@ class DisplayApp:
     async def _pairing_task(self, slideshow: Slideshow, cache_dir: Any) -> None:
         """Listen for a server UDP broadcast and hot-swap the producer when found."""
         stop = asyncio.Event()
+        assert self._http_client is not None
         client = self._http_client
 
         async def _handler(data: bytes, addr: tuple[str, int]) -> None:
@@ -126,7 +133,7 @@ class DisplayApp:
             server_url = f"http://{host}:{port}"
             _log.info("Discovered server at %s via UDP", server_url)
             slideshow.set_producer(
-                load_infinite(  # type: ignore[arg-type]
+                async_load_infinite(
                     lambda: ServerProducer(server_url, cache_dir, client).items()
                 )
             )

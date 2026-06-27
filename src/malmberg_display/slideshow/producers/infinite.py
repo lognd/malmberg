@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Callable, Generator
+from typing import AsyncGenerator, Callable, Generator
 
 from malmberg_display.display.proto import Displayable
 
@@ -17,6 +17,7 @@ def load_infinite(
 
     *factory* is called at the start of each cycle to rebuild the item list.
     This lets the producer pick up new files added to a directory between cycles.
+    Use this for sync producers (local directory, cache scan).
     """
     while True:
         items = list(factory())
@@ -25,3 +26,25 @@ def load_infinite(
         if shuffle:
             random.shuffle(items)
         yield from items
+
+
+async def async_load_infinite(
+    factory: Callable[[], AsyncGenerator[Displayable, None]],
+    *,
+    shuffle: bool = True,
+) -> AsyncGenerator[Displayable, None]:
+    """Async variant of load_infinite for producers that return async generators.
+
+    *factory* is called at the start of each cycle to collect all items.
+    Use this for ServerProducer which fetches over HTTP.
+    """
+    while True:
+        items: list[Displayable] = []
+        async for item in factory():
+            items.append(item)
+        if not items:
+            return
+        if shuffle:
+            random.shuffle(items)
+        for item in items:
+            yield item

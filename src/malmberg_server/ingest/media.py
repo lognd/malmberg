@@ -53,7 +53,9 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
     try:
         img = Image.open(path)
         width, height = img.size
-        raw_exif = img._getexif()  # type: ignore[attr-defined]
+        # getexif() is the public Pillow 6+ API; returns an empty Exif object if absent.
+        exif_obj = img.getexif()
+        raw_exif = dict(exif_obj) if exif_obj else {}
     except UnidentifiedImageError:
         return Err(IngestError.ExifError)
     except OSError:

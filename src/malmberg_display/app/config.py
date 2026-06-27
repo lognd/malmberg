@@ -40,6 +40,8 @@ class DisplayConfig(BaseModel):
     """Explicit server base URL (e.g. http://192.168.1.10:8444). Skips UDP discovery."""
     discovery_port: int = 9456
     """UDP port used for automatic server discovery broadcasts."""
+    history_len: int = 32
+    """Number of recently displayed items kept for backward navigation."""
 
     @field_validator("dwell_s")
     @classmethod
