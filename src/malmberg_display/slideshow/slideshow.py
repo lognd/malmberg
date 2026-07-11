@@ -38,7 +38,12 @@ class Slideshow:
         self._producer: ProducerType = producer
         self._load_ctx = load_ctx
         self._display_ctx = display_ctx
-        self._queue: asyncio.Queue[Displayable] = asyncio.Queue(maxsize=max_preload)
+        # Queue items are tagged with the producer generation they came from, so
+        # items pre-loaded from a superseded source are dropped on dequeue.
+        self._queue: asyncio.Queue[tuple[int, Displayable]] = asyncio.Queue(
+            maxsize=max_preload
+        )
+        self._generation = 0
         self._history: deque[Displayable] = deque(maxlen=history_len)
         self._paused = False
         self._current: Optional[Displayable] = None
@@ -47,8 +52,9 @@ class Slideshow:
         display_ctx.skip_event = self._skip
 
     def set_producer(self, producer: ProducerType) -> None:
-        """Hot-swap the active producer; takes effect on the next produce cycle."""
+        """Hot-swap the active producer; items from the old one are then dropped."""
         self._producer = producer
+        self._generation += 1
 
     def skip(self) -> None:
         """Cut the current item's dwell short so the next item shows at once."""
@@ -90,10 +96,11 @@ class Slideshow:
         return self._queue.qsize()
 
     async def produce_target(self) -> None:
-        """Continuously pre-load the next item and enqueue it."""
+        """Continuously pre-load the next item and enqueue it (with its generation)."""
         while True:
+            gen = self._generation
+            p = self._producer
             try:
-                p = self._producer
                 if hasattr(p, "__anext__"):
                     item = await cast(AsyncIterator[Displayable], p).__anext__()
                 else:
@@ -102,15 +109,17 @@ class Slideshow:
                 await asyncio.sleep(0.1)
                 continue
             await item.load(self._load_ctx)
-            await self._queue.put(item)
+            await self._queue.put((gen, item))
 
     async def display_target(self) -> None:
-        """Dequeue and display items; block on pause."""
+        """Dequeue and display items; drop stale-source items; block on pause."""
         while True:
             if self._paused:
                 await asyncio.sleep(0.1)
                 continue
-            item = await self._queue.get()
+            gen, item = await self._queue.get()
+            if gen != self._generation:
+                continue  # item came from a producer that has since been replaced
             self._current = item
             self._history.append(item)
             self._skip.clear()  # fresh skip window for this item's dwell
