@@ -691,15 +691,33 @@ def build_app(
 
     @app.post("/control/play-query")
     async def control_play_query(
-        q: str = Query(...), loop: bool = Query(default=False)
+        q: Optional[str] = Query(default=None),
+        q_time: Optional[str] = Query(default=None),
+        q_place: Optional[str] = Query(default=None),
+        q_person: Optional[str] = Query(default=None),
+        loop: bool = Query(default=False),
     ) -> dict:
         """Play only the photos matching a search (e.g. a year) on the display.
 
-        *loop* false (default) plays the match once and returns to the whole
-        library; true repeats it until "play all" is pressed.
+        Accepts either the single free-text *q* (OR across filename / year /
+        month / place / person) or the structured *q_time* / *q_place* /
+        *q_person* filters, which combine by AND (all provided must match).
+        At least one non-empty filter is required. *loop* false (default)
+        plays the match once and returns to the whole library; true repeats
+        it until "play all" is pressed.
         """
+        if not any((v or "").strip() for v in (q, q_time, q_place, q_person)):
+            raise HTTPException(status_code=400, detail="a filter is required")
         page = _store.list(
-            page=1, page_size=500, skip_hidden=True, sort="recent", q=q, people=_people
+            page=1,
+            page_size=500,
+            skip_hidden=True,
+            sort="recent",
+            q=q,
+            q_time=q_time,
+            q_place=q_place,
+            q_person=q_person,
+            people=_people,
         )
         ids = [it.id for it in page.items]
         if not ids:

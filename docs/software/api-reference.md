@@ -509,6 +509,40 @@ passed through unchanged.
 
 ---
 
+### `POST /control/play-query`
+
+Build a play set from a filter and show only those photos on the display
+(forwarded to the display's `/slideshow/playlist`).
+
+**Query parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | str | none | Single free-text filter (OR across filename / year / month / place / person), same matcher as `GET /media?q=` |
+| `q_time` | str | none | Time filter: a 4-digit year or `YYYY-MM` against `meta.taken_at` |
+| `q_place` | str | none | Place substring (case-insensitive) against `meta.place` |
+| `q_person` | str | none | Named-person substring against the item's detected people |
+| `loop` | bool | `false` | `false` plays the set once then returns to the whole library; `true` repeats until "play all" |
+
+`q_time` / `q_place` / `q_person` combine with each other (and with `q`) by
+**AND** -- exactly like `GET /media` -- so the dashboard's frame Time / Place /
+Person boxes play only photos matching all filled-in boxes. At least one
+non-empty filter is required. The dashboard's year/month quick-buttons post
+`q_time`; the free-text `q` path remains for other callers.
+
+**Response:** the display's `/slideshow/playlist` JSON, passed through.
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `400` | No non-empty filter given |
+| `404` | No photos match the filter |
+| `503` | No `display_url` configured on the server |
+| `502` | The display could not be reached, or returned an error |
+
+---
+
 ## Data models
 
 ### `MediaItem`

@@ -896,8 +896,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: #282828;
     border-color: var(--accent);
   }
-  #frame-search-row #frame-search-input { flex: 1 1 auto; }
-  #frame-search-row button, #frame-search-play-btn {
+  #frame-play-row { margin-top: 0.6rem; }
+  #frame-search-play-btn {
     min-height: 44px;
     padding: 0.4rem 1rem;
   }
@@ -1575,12 +1575,33 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           </button>
         </div>
         <div id="month-filter-buttons" class="collapsed"></div>
-        <div class="search-row" id="frame-search-row">
-          <input id="frame-search-input" type="text" autocomplete="off"
-            list="frame-search-suggestions"
-            aria-label="Type a year, month, place, or name to show on the frame"
-            placeholder="or type a year, place, or name...">
-          <datalist id="frame-search-suggestions"></datalist>
+        <div class="filter-box-row">
+          <label for="frame-time-input">Time</label>
+          <input id="frame-time-input" type="text" autocomplete="off"
+            aria-label="Show photos from a time, e.g. 2006 or 2006-07"
+            placeholder="e.g. 2006 or 2006-07">
+        </div>
+        <div class="filter-box-row">
+          <label for="frame-place-input">Place</label>
+          <div class="search-row" id="frame-place-search-row">
+            <input id="frame-place-input" type="text" autocomplete="off"
+              list="frame-place-suggestions"
+              aria-label="Show photos from a place"
+              placeholder="e.g. Tampa">
+            <datalist id="frame-place-suggestions"></datalist>
+          </div>
+        </div>
+        <div class="filter-box-row">
+          <label for="frame-person-input">Person</label>
+          <div class="search-row" id="frame-person-search-row">
+            <input id="frame-person-input" type="text" autocomplete="off"
+              list="frame-person-suggestions"
+              aria-label="Show photos of a person"
+              placeholder="By a person's name">
+            <datalist id="frame-person-suggestions"></datalist>
+          </div>
+        </div>
+        <div id="frame-play-row">
           <button id="frame-search-play-btn" type="button">Show on frame</button>
         </div>
         <div id="frame-preview-wrap">
@@ -2286,16 +2307,54 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       : base + " It plays once, then all photos come back.";
   }
 
-  /* ---- Show-on-frame preview strip: a small, browsable grid of what a
-     given query will show on the TV, so the user can see before/when they
-     press "Show on frame". ---- */
+  /* ---- Show-on-frame: three independent Time / Place / Person boxes that
+     AND together (same layout as the library search), driving a small
+     browsable preview of exactly what "Show on frame" will play. ---- */
+  var frameTimeInput = document.getElementById("frame-time-input");
+  var framePlaceInput = document.getElementById("frame-place-input");
+  var framePersonInput = document.getElementById("frame-person-input");
+  var framePlaceSuggestions =
+    document.getElementById("frame-place-suggestions");
+  var framePersonSuggestions =
+    document.getElementById("frame-person-suggestions");
   var framePreviewGrid = document.getElementById("frame-preview-grid");
   var framePreviewEmpty = document.getElementById("frame-preview-empty");
   var framePreviewPrev = document.getElementById("frame-preview-prev");
   var framePreviewNext = document.getElementById("frame-preview-next");
   var framePreviewInfo = document.getElementById("frame-preview-info");
   var FRAME_PREVIEW_PAGE_SIZE = 12;
-  var framePreviewState = { q: "", page: 1, hasNext: false, total: 0 };
+  var framePreviewState = { page: 1, hasNext: false, total: 0 };
+
+  /* Read the three frame boxes into {time, place, person} (trimmed). */
+  function frameFilters() {
+    return {
+      time: frameTimeInput.value.trim(),
+      place: framePlaceInput.value.trim(),
+      person: framePersonInput.value.trim(),
+    };
+  }
+
+  function frameHasFilter(f) {
+    return !!(f.time || f.place || f.person);
+  }
+
+  /* Build the shared &q_time=&q_place=&q_person= query fragment. */
+  function frameParams(f) {
+    var parts = [];
+    if (f.time) parts.push("q_time=" + encodeURIComponent(f.time));
+    if (f.place) parts.push("q_place=" + encodeURIComponent(f.place));
+    if (f.person) parts.push("q_person=" + encodeURIComponent(f.person));
+    return parts.join("&");
+  }
+
+  /* A short plain-language label of the current frame filters, for toasts. */
+  function frameLabel(f) {
+    var bits = [];
+    if (f.time) bits.push(f.time);
+    if (f.place) bits.push(f.place);
+    if (f.person) bits.push(f.person);
+    return bits.join(", ");
+  }
 
   function renderFramePreview(items) {
     framePreviewGrid.innerHTML = "";
@@ -2311,10 +2370,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     });
   }
 
-  function loadFramePreview(query, page) {
-    framePreviewState.q = query;
+  function loadFramePreview(page) {
     framePreviewState.page = page || 1;
-    if (!query) {
+    var f = frameFilters();
+    if (!frameHasFilter(f)) {
       framePreviewGrid.innerHTML = "";
       framePreviewEmpty.style.display = "none";
       framePreviewInfo.textContent = "";
@@ -2322,7 +2381,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       framePreviewNext.disabled = true;
       return;
     }
-    var params = "q=" + encodeURIComponent(query) +
+    var params = frameParams(f) +
       "&page=" + framePreviewState.page +
       "&page_size=" + FRAME_PREVIEW_PAGE_SIZE + "&sort=recent";
     fetch("/media?" + params)
@@ -2349,12 +2408,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   framePreviewPrev.addEventListener("click", function () {
     if (framePreviewState.page > 1) {
-      loadFramePreview(framePreviewState.q, framePreviewState.page - 1);
+      loadFramePreview(framePreviewState.page - 1);
     }
   });
   framePreviewNext.addEventListener("click", function () {
     if (framePreviewState.hasNext) {
-      loadFramePreview(framePreviewState.q, framePreviewState.page + 1);
+      loadFramePreview(framePreviewState.page + 1);
     }
   });
 
@@ -2392,10 +2451,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           btn.addEventListener("click", function () {
             setActiveYear(btn);
             setActiveMonth(null);
-            loadFramePreview(year, 1);
+            frameTimeInput.value = year;
+            framePlaceInput.value = "";
+            framePersonInput.value = "";
+            loadFramePreview(1);
             runControl(
               btn,
-              "/control/play-query?q=" + encodeURIComponent(year) +
+              "/control/play-query?q_time=" + encodeURIComponent(year) +
                 "&loop=" + isLoop(),
               "POST",
               undefined,
@@ -2441,10 +2503,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             btn.addEventListener("click", function () {
               setActiveYear(null);
               setActiveMonth(btn);
-              loadFramePreview(ym, 1);
+              frameTimeInput.value = ym;
+              framePlaceInput.value = "";
+              framePersonInput.value = "";
+              loadFramePreview(1);
               runControl(
                 btn,
-                "/control/play-query?q=" + encodeURIComponent(ym) +
+                "/control/play-query?q_time=" + encodeURIComponent(ym) +
                   "&loop=" + isLoop(),
                 "POST",
                 undefined,
@@ -2789,67 +2854,63 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   loadPlaceSuggestions("", placeSuggestions);
   loadPersonSuggestions("", personSuggestions);
 
-  /* ---- Frame manual search: one box covers year, month, place, or
-     person, since the server's play-query matcher handles all four. ---- */
-  var frameSearchInput = document.getElementById("frame-search-input");
-  var frameSearchSuggestions = document.getElementById("frame-search-suggestions");
+  /* ---- Frame Time / Place / Person boxes: same AND layout as the library
+     search, but they drive the preview + "Show on frame" (play-query with
+     q_time / q_place / q_person) instead of the browse grid. ---- */
   var frameSearchPlayBtn = document.getElementById("frame-search-play-btn");
-  var frameSearchDebounce = null;
+  var frameTimeDebounce = null;
+  var framePlaceDebounce = null;
+  var framePersonDebounce = null;
 
-  function loadFrameSuggestions(prefix) {
-    Promise.all([
-      fetch("/places?q=" + encodeURIComponent(prefix) + "&limit=10")
-        .then(function (r) { return r.json(); })
-        .catch(function () { return []; }),
-      fetch("/people/suggest?q=" + encodeURIComponent(prefix) + "&limit=10")
-        .then(function (r) { return r.json(); })
-        .catch(function () { return []; }),
-    ]).then(function (results) {
-      var places = results[0] || [];
-      var people = results[1] || [];
-      frameSearchSuggestions.innerHTML = "";
-      places.forEach(function (place) {
-        var opt = document.createElement("option");
-        opt.value = place;
-        frameSearchSuggestions.appendChild(opt);
-      });
-      people.forEach(function (name) {
-        var opt = document.createElement("option");
-        opt.value = name;
-        frameSearchSuggestions.appendChild(opt);
-      });
-    });
-  }
+  frameTimeInput.addEventListener("input", function () {
+    if (frameTimeDebounce) window.clearTimeout(frameTimeDebounce);
+    frameTimeDebounce = window.setTimeout(function () {
+      setActiveYear(null);
+      setActiveMonth(null);
+      loadFramePreview(1);
+    }, 350);
+  });
 
-  frameSearchInput.addEventListener("input", function () {
-    if (frameSearchDebounce) window.clearTimeout(frameSearchDebounce);
-    frameSearchDebounce = window.setTimeout(function () {
-      loadFrameSuggestions(frameSearchInput.value.trim());
-      loadFramePreview(frameSearchInput.value.trim(), 1);
+  framePlaceInput.addEventListener("input", function () {
+    if (framePlaceDebounce) window.clearTimeout(framePlaceDebounce);
+    framePlaceDebounce = window.setTimeout(function () {
+      loadPlaceSuggestions(framePlaceInput.value.trim(), framePlaceSuggestions);
+      loadFramePreview(1);
+    }, 350);
+  });
+
+  framePersonInput.addEventListener("input", function () {
+    if (framePersonDebounce) window.clearTimeout(framePersonDebounce);
+    framePersonDebounce = window.setTimeout(function () {
+      loadPersonSuggestions(
+        framePersonInput.value.trim(), framePersonSuggestions
+      );
+      loadFramePreview(1);
     }, 350);
   });
 
   function playFrameSearch() {
-    var query = frameSearchInput.value.trim();
-    if (!query) {
-      showToast("Type a year, month, place, or name first.", "err");
+    var f = frameFilters();
+    if (!frameHasFilter(f)) {
+      showToast("Fill in a time, place, or name first.", "err");
       return;
     }
-    setActiveYear(null);
-    setActiveMonth(null);
-    loadFramePreview(query, 1);
+    loadFramePreview(1);
     runControl(frameSearchPlayBtn,
-      "/control/play-query?q=" + encodeURIComponent(query) + "&loop=" + isLoop(),
+      "/control/play-query?" + frameParams(f) + "&loop=" + isLoop(),
       "POST", undefined, "...",
-      loopNote('Now showing "' + query + '".'));
+      loopNote('Now showing "' + frameLabel(f) + '".'));
   }
   frameSearchPlayBtn.addEventListener("click", playFrameSearch);
-  frameSearchInput.addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter") playFrameSearch();
+  [frameTimeInput, framePlaceInput, framePersonInput].forEach(function (el) {
+    el.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") playFrameSearch();
+    });
   });
 
-  loadFrameSuggestions("");
-  loadFramePreview("", 1);
+  loadPlaceSuggestions("", framePlaceSuggestions);
+  loadPersonSuggestions("", framePersonSuggestions);
+  loadFramePreview(1);
 
   /* ---- People: compact collapsible cards, naming, review, merge ---- */
   var peopleGrid = document.getElementById("people-grid");
@@ -2880,7 +2941,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   function refreshPersonDatalists() {
     loadPersonSuggestions("", personSuggestions);
-    loadFrameSuggestions("");
+    loadPersonSuggestions("", framePersonSuggestions);
   }
 
   function makePersonCard(person) {

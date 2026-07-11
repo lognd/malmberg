@@ -165,7 +165,10 @@ def test_dashboard_page(client: TestClient) -> None:
     # Domain split: "play on the frame" selectors live in the display domain,
     # library search boxes + People review UI live in the library domain.
     assert 'id="frame-search-play-btn"' in r.text
-    assert 'id="frame-search-input"' in r.text
+    # Frame control uses structured Time / Place / Person boxes (AND).
+    assert 'id="frame-time-input"' in r.text
+    assert 'id="frame-place-input"' in r.text
+    assert 'id="frame-person-input"' in r.text
     assert 'id="people-toggle"' in r.text
     assert 'id="review-backdrop"' in r.text
     assert 'id="by-person"' in r.text
@@ -460,6 +463,83 @@ def test_control_playlist_without_display_url(client: TestClient) -> None:
     client.post("/playlists", json={"name": "trip"})
     r = client.post("/control/playlist/trip")
     assert r.status_code == 503
+
+
+def test_control_play_query_requires_a_filter(client: TestClient) -> None:
+    # No filter at all -> 400 (before any display forwarding).
+    r = client.post("/control/play-query")
+    assert r.status_code == 400
+    # Empty/whitespace filters are still "no filter".
+    r = client.post("/control/play-query", params={"q_time": "  "})
+    assert r.status_code == 400
+
+
+def test_control_play_query_ands_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    from malmberg_core.models import MediaItem, MediaMetadata
+    from malmberg_server.api import routes as routes_module
+    from malmberg_server.ingest.store import MediaStore
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "ok"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, json: object = None
+        ) -> _FakeResponse:
+            captured["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr(routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    store = MediaStore()
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(
+                sha256="h1", taken_at=datetime(2006, 7, 4), place="Tampa, FL"
+            ),
+        )
+    )
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(
+                sha256="h2", taken_at=datetime(2006, 7, 4), place="Orlando, FL"
+            ),
+        )
+    )
+    cfg = ServerConfig(fs_root=tmp_path, display_url="http://display.local:8443")
+    for d in ("media", "uploads", "cloud", ".trash", "logs"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    c = TestClient(routes_module.build_app(cfg, store=store))
+
+    r = c.post("/control/play-query", params={"q_time": "2006", "q_place": "Tampa"})
+    assert r.status_code == 200
+    # Only the 2006 Tampa photo should have been forwarded (AND, not OR).
+    assert captured["json"]["item_ids"] == [store.all_ids()[0]]
 
 
 def test_control_status_proxies_to_display(
