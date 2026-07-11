@@ -502,7 +502,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       .then(function (data) {
         (data.items || []).forEach(function (item) {
           var img = document.createElement("img");
-          img.src = "/media/" + item.id;
+          img.src = "/media/" + item.id + "/thumb";
           img.alt = item.filename;
           img.loading = "lazy";
           grid.appendChild(img);

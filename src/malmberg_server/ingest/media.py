@@ -6,7 +6,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import ExifTags, Image, UnidentifiedImageError
+from PIL import ExifTags, Image, ImageDraw, ImageOps, UnidentifiedImageError
 from typani.result import Err, Ok, Result
 
 from malmberg_core.models import MediaMetadata
@@ -115,6 +115,37 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
             schema_version=META_SCHEMA_VERSION,
         )
     )
+
+
+def make_thumbnail(
+    src: Path, dest: Path, size: int, *, is_video: bool = False
+) -> Result[Path, IngestError]:
+    """Write a square-bounded JPEG thumbnail of *src* to *dest*.
+
+    Images are EXIF-oriented and scaled to fit within *size* x *size*. Videos
+    get a lightweight generated placeholder tile (a play glyph) so the grid
+    renders without decoding the clip. Returns Ok(dest) or an IngestError.
+    """
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if is_video:
+            img = Image.new("RGB", (size, size), (32, 34, 40))
+            draw = ImageDraw.Draw(img)
+            c = size / 2
+            r = size / 6
+            draw.polygon(
+                [(c - r, c - r * 1.25), (c - r, c + r * 1.25), (c + r * 1.4, c)],
+                fill=(210, 210, 216),
+            )
+        else:
+            img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+            img.thumbnail((size, size))
+        img.save(dest, "JPEG", quality=82)
+        return Ok(dest)
+    except OSError:
+        return Err(IngestError.IOError)
+    except Exception:
+        return Err(IngestError.ExifError)
 
 
 def _safe_ifd(exif_obj: object, ifd_id: object) -> dict:

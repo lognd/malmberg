@@ -82,6 +82,24 @@ def test_upload_and_retrieve(client: TestClient, tmp_path: Path) -> None:
     assert r3.content == content
 
 
+def test_media_thumbnail(client: TestClient) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (1200, 900), (120, 60, 30)).save(buf, "JPEG")
+    r = client.post("/upload", files={"file": ("photo.jpg", buf.getvalue(), "image/jpeg")})
+    item_id = r.json()["id"]
+
+    t = client.get(f"/media/{item_id}/thumb")
+    assert t.status_code == 200
+    assert t.headers["content-type"] == "image/jpeg"
+    thumb = Image.open(BytesIO(t.content))
+    assert max(thumb.size) <= 400  # bounded to the requested size
+    assert len(t.content) < 900 * 1200  # much smaller than the source
+
+
 def test_patch_media(client: TestClient) -> None:
     # Upload first.
     r = client.post(

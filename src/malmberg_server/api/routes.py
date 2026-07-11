@@ -19,6 +19,7 @@ from malmberg_core.networking import get_mac_address
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML, UPLOAD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
 from malmberg_server.ingest.errors import IngestError
+from malmberg_server.ingest.media import make_thumbnail
 from malmberg_server.ingest.store import MediaStore
 from malmberg_server.ingest.upload import handle_upload
 from malmberg_server.version import VersionInfo, collect_version_info
@@ -147,6 +148,27 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="File not found on disk")
         return FileResponse(str(path))
+
+    @app.get("/media/{item_id}/thumb")
+    async def media_thumb(
+        item_id: str,
+        size: int = Query(default=400, ge=64, le=1024),
+    ) -> FileResponse:
+        """Serve a cached JPEG thumbnail for the item (generated on first request)."""
+        item = _store.get(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Media item not found")
+        thumb_path = cfg.fs_root / ".thumbs" / f"{item_id}_{size}.jpg"
+        if not thumb_path.is_file():
+            src = _media_root() / item.server_path
+            if not src.is_file():
+                raise HTTPException(status_code=404, detail="File not found on disk")
+            result = make_thumbnail(
+                src, thumb_path, size, is_video=item.kind == "video"
+            )
+            if result.is_err:
+                _raise_ingest(result.danger_err)
+        return FileResponse(str(thumb_path), media_type="image/jpeg")
 
     @app.get("/upload", response_class=HTMLResponse)
     async def upload_page() -> str:
