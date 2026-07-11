@@ -144,6 +144,7 @@ class MediaStore:
         skip_hidden: bool = True,
         sort: str = "id",
         media_root: Optional[Path] = None,
+        q: Optional[str] = None,
     ) -> MediaPage:
         """Return a paginated slice of the media index.
 
@@ -151,10 +152,15 @@ class MediaStore:
         ``"recent"`` (newest first, by ``meta.taken_at`` falling back to
         ``meta.ingest_at``). If *media_root* is given, items on the returned
         page with stale metadata are refreshed in place before being served.
+        *q*, if given, filters to items whose filename contains *q*
+        (case-insensitive), or whose ``meta.taken_at`` year equals *q* when
+        *q* is a 4-digit year.
         """
         all_items = [
             it for it in self._items.values() if not (skip_hidden and it.do_not_display)
         ]
+        if q:
+            all_items = [it for it in all_items if self._matches_query(it, q)]
         if sort == "recent":
             all_items.sort(
                 key=lambda it: it.meta.taken_at or it.meta.ingest_at, reverse=True
@@ -219,6 +225,50 @@ class MediaStore:
     def sha256_exists(self, digest: str) -> bool:
         """Return True if any stored item has the given SHA-256 digest."""
         return any(it.meta.sha256 == digest for it in self._items.values())
+
+    def stats(self, *, skip_hidden: bool = True) -> dict:
+        """Summarize the library: counts by kind, taken_at date range, by-year.
+
+        Returns a dict with keys ``total``, ``images``, ``videos``,
+        ``undated`` (items with no ``meta.taken_at``), ``earliest``,
+        ``latest`` (ISO-8601 strings or None), and ``by_year`` (a dict of
+        4-digit year string -> count, for dated items only).
+        """
+        items = [
+            it for it in self._items.values() if not (skip_hidden and it.do_not_display)
+        ]
+        images = sum(1 for it in items if it.kind == "image")
+        videos = sum(1 for it in items if it.kind == "video")
+        dated = [it.meta.taken_at for it in items if it.meta.taken_at is not None]
+        undated = len(items) - len(dated)
+        by_year: dict[str, int] = {}
+        for dt in dated:
+            year = str(dt.year)
+            by_year[year] = by_year.get(year, 0) + 1
+        return {
+            "total": len(items),
+            "images": images,
+            "videos": videos,
+            "undated": undated,
+            "earliest": min(dated).isoformat() if dated else None,
+            "latest": max(dated).isoformat() if dated else None,
+            "by_year": dict(sorted(by_year.items())),
+        }
+
+    @staticmethod
+    def _matches_query(item: MediaItem, q: str) -> bool:
+        """Return True if *item* matches search query *q* (filename or year)."""
+        needle = q.strip().lower()
+        if needle in item.filename.lower():
+            return True
+        if (
+            len(needle) == 4
+            and needle.isdigit()
+            and item.meta.taken_at is not None
+            and str(item.meta.taken_at.year) == needle
+        ):
+            return True
+        return False
 
     def __len__(self) -> int:
         return len(self._items)

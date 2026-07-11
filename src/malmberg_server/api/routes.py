@@ -9,14 +9,14 @@ from typing import Literal, Optional
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from malmberg_core import __version__
 from malmberg_core.logging import get_logger
 from malmberg_core.models import HidePolicy, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
-from malmberg_server.api.web import DASHBOARD_PAGE_HTML, UPLOAD_PAGE_HTML
+from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import make_thumbnail
@@ -121,6 +121,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=500),
         sort: Literal["id", "recent"] = Query(default="id"),
+        q: Optional[str] = Query(default=None),
     ) -> MediaPage:
         result = _store.list(
             page=page,
@@ -128,12 +129,18 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             skip_hidden=True,
             sort=sort,
             media_root=_media_root(),
+            q=q,
         )
         if _store.pop_dirty():
             save = _store.save_to_disk(_index_path())
             if save.is_err:
                 _log.error("Failed to persist media index after metadata refresh")
         return result
+
+    @app.get("/stats")
+    async def media_stats() -> dict:
+        """Report library-wide counts, date range, and per-year distribution."""
+        return _store.stats()
 
     @app.get("/media/{item_id}")
     async def get_media(item_id: str) -> FileResponse:
@@ -170,10 +177,10 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
                 _raise_ingest(result.danger_err)
         return FileResponse(str(thumb_path), media_type="image/jpeg")
 
-    @app.get("/upload", response_class=HTMLResponse)
-    async def upload_page() -> str:
-        """Serve the mobile-first bulk-upload page (drag-and-drop, many files)."""
-        return UPLOAD_PAGE_HTML
+    @app.get("/upload")
+    async def upload_page() -> RedirectResponse:
+        """Redirect to the single dashboard page, which now hosts upload."""
+        return RedirectResponse(url="/dashboard", status_code=307)
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_page() -> str:

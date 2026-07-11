@@ -142,11 +142,10 @@ def test_get_nonexistent(client: TestClient) -> None:
     assert r.status_code == 404
 
 
-def test_upload_page(client: TestClient) -> None:
-    r = client.get("/upload")
-    assert r.status_code == 200
-    assert "text/html" in r.headers["content-type"]
-    assert "Bulk Upload" in r.text
+def test_upload_page_redirects_to_dashboard(client: TestClient) -> None:
+    r = client.get("/upload", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/dashboard"
 
 
 def test_dashboard_page(client: TestClient) -> None:
@@ -154,6 +153,72 @@ def test_dashboard_page(client: TestClient) -> None:
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "Dashboard" in r.text
+    # Single source of truth: upload UI is folded into the dashboard page.
+    assert "dropzone" in r.text
+    assert "file-input" in r.text
+    assert 'id="grid"' in r.text
+    assert "control-hint" in r.text
+
+
+def test_stats_empty(client: TestClient) -> None:
+    r = client.get("/stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 0
+    assert data["images"] == 0
+    assert data["videos"] == 0
+    assert data["undated"] == 0
+    assert data["earliest"] is None
+    assert data["latest"] is None
+    assert data["by_year"] == {}
+
+
+def test_stats_after_upload(client: TestClient) -> None:
+    client.post("/upload", files={"file": ("a.jpg", b"aaa", "image/jpeg")})
+    client.post("/upload", files={"file": ("b.jpg", b"bbb", "image/jpeg")})
+    r = client.get("/stats")
+    data = r.json()
+    assert data["total"] == 2
+    assert data["images"] == 2
+    assert data["videos"] == 0
+
+
+def test_media_search_by_filename(client: TestClient) -> None:
+    client.post("/upload", files={"file": ("beach.jpg", b"aaa", "image/jpeg")})
+    client.post("/upload", files={"file": ("mountain.jpg", b"bbb", "image/jpeg")})
+    r = client.get("/media", params={"q": "beach"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    assert data["items"][0]["filename"] == "beach.jpg"
+
+    r_ci = client.get("/media", params={"q": "BEACH"})
+    assert r_ci.json()["total"] == 1
+
+
+def test_media_search_no_match(client: TestClient) -> None:
+    client.post("/upload", files={"file": ("beach.jpg", b"aaa", "image/jpeg")})
+    r = client.get("/media", params={"q": "zzz-no-match"})
+    assert r.json()["total"] == 0
+    assert r.json()["items"] == []
+
+
+def test_media_search_with_pagination(client: TestClient) -> None:
+    for i in range(5):
+        client.post(
+            "/upload",
+            files={"file": (f"photo-{i}.jpg", f"data{i}".encode(), "image/jpeg")},
+        )
+    r = client.get("/media", params={"q": "photo", "page": 1, "page_size": 2})
+    data = r.json()
+    assert data["total"] == 5
+    assert len(data["items"]) == 2
+    assert data["has_next"] is True
+
+    r2 = client.get("/media", params={"q": "photo", "page": 3, "page_size": 2})
+    data2 = r2.json()
+    assert len(data2["items"]) == 1
+    assert data2["has_next"] is False
 
 
 def test_list_media_sort_recent(client: TestClient) -> None:
