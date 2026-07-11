@@ -433,6 +433,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--aqua);
     border-color: var(--aqua);
   }
+  #year-filter-buttons button.yf-active {
+    background: var(--accent);
+    color: #282828;
+    border-color: var(--accent);
+  }
   /* Toasts */
   #toast-stack {
     position: fixed;
@@ -608,6 +613,28 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   .tile.selected img {
     outline: 3px solid var(--aqua);
     outline-offset: -3px;
+  }
+  .tile .play-badge {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(20, 20, 20, 0.55);
+    border: 2px solid rgba(235, 219, 178, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .tile .play-badge::before {
+    content: "";
+    margin-left: 3px;
+    border-style: solid;
+    border-width: 8px 0 8px 13px;
+    border-color: transparent transparent transparent var(--text);
   }
   .pagination {
     display: flex;
@@ -992,12 +1019,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
       on the server to enable.</div>
       <div id="restart-row">
-        <div class="yf-label">Trouble? Restart a device</div>
+        <div class="yf-label">Frame frozen or acting up? Restart it.</div>
         <button id="btn-restart-display" type="button" class="danger-btn">
           Restart display
-        </button>
-        <button id="btn-restart-server" type="button" class="danger-btn">
-          Restart server
         </button>
       </div>
     </section>
@@ -1078,6 +1102,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <div id="trash-panel">
         <div id="trash-empty">Recycle bin is empty.</div>
         <div class="grid" id="trash-grid"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Server maintenance</h2>
+      <div id="restart-server-row">
+        <div class="yf-label">Restart the server that stores your library.</div>
+        <button id="btn-restart-server" type="button" class="danger-btn">
+          Restart server
+        </button>
       </div>
     </section>
   </div>
@@ -1476,6 +1510,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .then(function () { refreshStatus(); });
   });
 
+  function setActiveYear(btn) {
+    var all = yearFilterButtons.querySelectorAll("button");
+    for (var i = 0; i < all.length; i++) all[i].classList.remove("yf-active");
+    if (btn) btn.classList.add("yf-active");
+  }
+
   function loadYearFilter() {
     fetch("/stats")
       .then(function (r) { return r.json(); })
@@ -1486,6 +1526,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         allBtn.className = "yf-all";
         allBtn.textContent = "All";
         allBtn.addEventListener("click", function () {
+          setActiveYear(allBtn);
           runControl(allBtn, "/control/play-all", "POST", undefined,
             "...", "Now playing the whole library.");
         });
@@ -1495,6 +1536,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           btn.type = "button";
           btn.textContent = year;
           btn.addEventListener("click", function () {
+            setActiveYear(btn);
             runControl(
               btn,
               "/control/play-query?q=" + encodeURIComponent(year),
@@ -1675,6 +1717,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       img.alt = item.filename;
       img.loading = "lazy";
       tile.appendChild(img);
+
+      if (item.kind === "video") {
+        var badge = document.createElement("div");
+        badge.className = "play-badge";
+        tile.appendChild(badge);
+      }
 
       if (state.selectMode) {
         var mark = document.createElement("div");
