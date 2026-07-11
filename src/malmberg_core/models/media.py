@@ -79,6 +79,13 @@ class MediaItem(BaseModel):
     item at least once (independent of whether any faces were found). Lets
     the worker skip items it has already looked at without a separate index.
     """
+    faces_version: int = 0
+    """The face-pipeline version this item was last processed with (see
+    malmberg_server.faces.worker.FACE_PROCESSING_VERSION). Items with a
+    version behind the current one are transparently reprocessed by the
+    background worker (self-heal after a model/threshold/schema change).
+    Defaults to 0 so items indexed before this field parse unchanged and get
+    reprocessed once."""
 
 
 class MediaPage(BaseModel):

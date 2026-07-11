@@ -319,16 +319,23 @@ class MediaStore:
         """Return True if any stored item has the given SHA-256 digest."""
         return any(it.meta.sha256 == digest for it in self._items.values())
 
-    def pending_face_ids(self, limit: int) -> list[str]:
-        """Return up to *limit* item ids not yet visited by the face worker.
+    def all_ids(self) -> list[str]:
+        """Return every item id currently in the index (trashed included)."""
+        return list(self._items.keys())
 
-        Excludes trashed items. Used by malmberg_server.faces.worker to walk
-        the library without the worker reaching into private state.
+    def pending_face_ids(self, face_version: int, limit: int) -> list[str]:
+        """Return up to *limit* item ids needing (re)processing by the face worker.
+
+        An item is pending if it was never processed, or was processed by a
+        face pipeline older than *face_version* (the reprocess / self-heal
+        path). Excludes trashed items. Lets the worker walk the library
+        without reaching into private state.
         """
         return [
             it.id
             for it in self._items.values()
-            if it.trashed_at is None and not it.faces_processed
+            if it.trashed_at is None
+            and (not it.faces_processed or it.faces_version < face_version)
         ][:limit]
 
     def counts_by_person(self, *, skip_hidden: bool = True) -> dict[str, int]:

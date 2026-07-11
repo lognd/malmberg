@@ -163,6 +163,64 @@ def test_proxy_people_503_when_unpaired() -> None:
     assert _client().get("/people/suggest").status_code == 503
 
 
+def test_proxy_person_photos_forwards_to_server() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/people/p1/photos"
+        return httpx.Response(200, json=[{"item_id": "i1", "bbox": [1, 2, 3, 4]}])
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.get("/people/p1/photos")
+    assert r.status_code == 200
+    assert r.json()[0]["item_id"] == "i1"
+
+
+def test_proxy_people_min_count_passthrough() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=[])
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    c.get("/people", params={"min_count": 1})
+    assert "min_count=1" in seen["url"]
+
+
+def test_proxy_reassign_face_forwards_to_server() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"status": "reassigned", "person_id": "p2"})
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.post("/faces/f1/reassign", json={"person_id": "p2"})
+    assert r.status_code == 200
+    assert seen["url"] == "http://server.local:8444/faces/f1/reassign"
+
+
+def test_proxy_merge_and_recluster_forward() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/merge"):
+            return httpx.Response(200, json={"id": "p1"})
+        return httpx.Response(200, json={"status": "reclustered"})
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    assert c.post("/people/p1/merge", json={"from_id": "p2"}).status_code == 200
+    assert c.post("/people/recluster").json()["status"] == "reclustered"
+
+
+def test_proxy_new_people_routes_503_when_unpaired() -> None:
+    assert _client().get("/people/p1/photos").status_code == 503
+    assert _client().post("/people/p1/merge", json={"from_id": "p2"}).status_code == 503
+    assert _client().post("/people/recluster").status_code == 503
+    assert _client().post("/faces/f1/reassign", json={}).status_code == 503
+
+
 def test_proxy_media_thumb_streams_bytes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/media/xyz/thumb"

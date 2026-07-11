@@ -200,40 +200,172 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   }
   .place-chip b { color: var(--aqua); font-weight: 700; }
   #place-search-row #place-input { flex: 1 1 auto; }
-  /* People cards */
+  #person-search-row #person-input { flex: 1 1 auto; }
+  /* By-person breakdown, same chip look as by-place */
+  #by-person {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  /* People section: collapsible header + compact cards */
+  .people-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .people-head h2 { margin: 0; }
+  .collapse-btn {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.6rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #people-body.collapsed { display: none; }
+  #people-show-small-row {
+    display: flex;
+    gap: 0.45rem;
+    align-items: flex-start;
+    margin-top: 0.7rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
   .people-grid {
     margin-top: 0.85rem;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.6rem;
+    gap: 0.55rem;
   }
   .person-card {
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.5rem;
-    width: 108px;
+    padding: 0.45rem;
+    width: 96px;
     text-align: center;
   }
   .person-card img {
-    width: 88px;
-    height: 88px;
+    width: 84px;
+    height: 84px;
     object-fit: cover;
     border-radius: 6px;
     background: var(--bg);
+    display: block;
+  }
+  .person-card .person-name {
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-top: 0.3rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .person-card .person-count {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: var(--muted);
-    margin: 0.3rem 0;
+    margin: 0.15rem 0 0.3rem;
   }
-  .person-card input {
+  .person-card .person-actions {
+    display: flex;
+    gap: 0.25rem;
+    justify-content: center;
+  }
+  .person-card .person-actions button {
+    flex: 1 1 auto;
+    font-size: 0.68rem;
+    padding: 0.2rem 0.1rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .person-card .person-name-edit { margin-top: 0.3rem; display: none; }
+  .person-card .person-name-edit.show { display: block; }
+  .person-card .person-name-edit input {
     width: 100%;
     font-size: 0.72rem;
     padding: 0.2rem;
     box-sizing: border-box;
   }
-  #person-search-row #person-input { flex: 1 1 auto; }
+  /* Review modal (per-person face review + green boxes + overrides) */
+  #review-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    display: none;
+    z-index: 60;
+    overflow-y: auto;
+    padding: 1rem;
+  }
+  #review-backdrop.show { display: block; }
+  #review-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    max-width: 760px;
+    margin: 1rem auto;
+    padding: 1rem;
+    position: relative;
+  }
+  #review-close {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.6rem;
+    font-size: 1.6rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #review-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.6rem; }
+  .review-tools {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .review-tools input { flex: 1 1 auto; min-width: 8rem; }
+  #review-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.7rem;
+  }
+  .review-face { text-align: center; }
+  .review-face-imgwrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    line-height: 0;
+  }
+  .review-face-imgwrap img {
+    max-width: 100%;
+    border-radius: 6px;
+    display: block;
+  }
+  .review-face-box {
+    position: absolute;
+    border: 3px solid #b8bb26;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  .review-face button {
+    margin-top: 0.3rem;
+    font-size: 0.72rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  #frame-place-row, #frame-person-row { margin-top: 0.4rem; }
   /* Upload section */
   #dropzone {
     border: 2px dashed var(--border);
@@ -455,11 +587,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     opacity: 0.6;
     cursor: not-allowed;
   }
-  /* Year filter */
-  #year-filter-row {
+  /* Frame filter group (year/place/person -> play on frame) */
+  #frame-filter-group {
     margin-top: 0.9rem;
   }
-  #year-filter-row .yf-label {
+  #frame-filter-group .yf-label {
     font-size: 0.8rem;
     color: var(--muted);
     margin-bottom: 0.4rem;
@@ -1074,9 +1206,21 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <label for="display-select">Which frame</label>
         <select id="display-select" disabled></select>
       </div>
-      <div id="year-filter-row">
-        <div class="yf-label">Show a year on the frame</div>
+      <div id="frame-filter-group">
+        <div class="yf-label">Show a person, place, or year on the frame</div>
         <div id="year-filter-buttons"></div>
+        <div class="search-row" id="frame-place-row">
+          <input id="frame-place-input" type="text" autocomplete="off"
+            list="frame-place-suggestions" placeholder="A place, e.g. Tampa">
+          <datalist id="frame-place-suggestions"></datalist>
+          <button id="frame-place-play-btn" type="button">Play place</button>
+        </div>
+        <div class="search-row" id="frame-person-row">
+          <input id="frame-person-input" type="text" autocomplete="off"
+            list="frame-person-suggestions" placeholder="A person's name">
+          <datalist id="frame-person-suggestions"></datalist>
+          <button id="frame-person-play-btn" type="button">Play person</button>
+        </div>
       </div>
       <label id="loop-toggle-row">
         <input type="checkbox" id="loop-toggle">
@@ -1110,41 +1254,48 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <div id="by-year"></div>
       <div id="by-month"></div>
       <div id="by-place"></div>
+      <div id="by-person"></div>
     </section>
 
     <section>
-      <h2>Find a place</h2>
+      <h2>Search by place or person</h2>
       <div class="search-row" id="place-search-row">
         <input id="place-input" type="text" autocomplete="off"
           list="place-suggestions"
-          placeholder="Type a place, e.g. Tampa">
+          placeholder="Filter photos by place, e.g. Tampa">
         <datalist id="place-suggestions"></datalist>
-        <button id="place-play-btn" type="button">Play this place</button>
-      </div>
-      <div class="domain-sub" id="place-hint">
-        Selecting a place filters the browse grid below and can play just
-        those photos on the frame.
-      </div>
-    </section>
-
-    <section>
-      <h2>People</h2>
-      <div class="domain-sub">
-        Faces detected in your photos are grouped automatically; give a
-        person a name below to search and play just their photos. New
-        photos are scanned in the background after upload, so it can take
-        a little while for a new face to show up here.
-      </div>
-      <div id="people-grid" class="people-grid"></div>
-      <div id="people-empty" class="domain-sub">
-        No faces detected yet.
       </div>
       <div class="search-row" id="person-search-row">
         <input id="person-input" type="text" autocomplete="off"
           list="person-suggestions"
-          placeholder="Type a person's name">
+          placeholder="Filter photos by a person's name">
         <datalist id="person-suggestions"></datalist>
-        <button id="person-play-btn" type="button">Play this person</button>
+      </div>
+      <div class="domain-sub" id="place-hint">
+        Typing here filters the browse grid below. To show a place or person
+        on the TV, use "Show a person, place, or year on the frame" up top.
+      </div>
+    </section>
+
+    <section id="people-section">
+      <div class="people-head">
+        <h2>People</h2>
+        <button id="people-toggle" type="button" class="collapse-btn">Hide</button>
+      </div>
+      <div id="people-body">
+        <div class="domain-sub">
+          Faces detected in your photos are grouped automatically. Name a
+          person to search and play their photos; open Review to check which
+          face is meant, fix a wrong grouping, or merge duplicates. New
+          uploads are scanned in the background, so a new face can take a
+          little while to appear.
+        </div>
+        <div id="people-grid" class="people-grid"></div>
+        <div id="people-empty" class="domain-sub">No people to name yet.</div>
+        <label id="people-show-small-row">
+          <input type="checkbox" id="people-show-small">
+          <span>Also show small, uncertain groups (fewer than 3 photos).</span>
+        </label>
       </div>
     </section>
 
@@ -1251,6 +1402,28 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   </div>
 </div>
 
+<div id="review-backdrop">
+  <div id="review-card">
+    <button id="review-close" type="button" aria-label="Close">&times;</button>
+    <div id="review-title"></div>
+    <div class="review-tools">
+      <input id="review-name" type="text" placeholder="Name this person">
+      <button id="review-name-btn" type="button">Save name</button>
+    </div>
+    <div class="review-tools">
+      <input id="review-merge-input" type="text" autocomplete="off"
+        list="review-merge-suggestions" placeholder="Merge into person (name)">
+      <datalist id="review-merge-suggestions"></datalist>
+      <button id="review-merge-btn" type="button">Merge</button>
+    </div>
+    <div class="domain-sub">
+      Each photo shows a green box around the face grouped here. If a box is
+      the wrong person, press "Not this person" to split it off.
+    </div>
+    <div id="review-grid"></div>
+  </div>
+</div>
+
 <script>
 (function () {
   "use strict";
@@ -1309,6 +1482,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var byYear = document.getElementById("by-year");
   var byMonth = document.getElementById("by-month");
   var byPlace = document.getElementById("by-place");
+  var byPerson = document.getElementById("by-person");
   var MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -1393,6 +1567,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             placeInput.value = place;
           });
           byPlace.appendChild(chip);
+        });
+        byPerson.innerHTML = "";
+        var byPersonData = data.by_person || {};
+        Object.keys(byPersonData).forEach(function (name) {
+          var chip = document.createElement("span");
+          chip.className = "place-chip";
+          chip.innerHTML = "<b></b> ";
+          chip.querySelector("b").textContent = String(byPersonData[name]);
+          chip.appendChild(document.createTextNode(name));
+          chip.title = "Search and browse photos of " + name;
+          chip.addEventListener("click", function () {
+            searchInput.value = name;
+            state.q = name;
+            state.page = 1;
+            loadGrid();
+            personInput.value = name;
+          });
+          byPerson.appendChild(chip);
         });
       })
       .catch(function () {
@@ -1922,160 +2114,339 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     }, 350);
   });
 
-  /* ---- Location autocomplete + "play this place" ---- */
+  /* ---- Library search boxes (filter the browse grid only) ---- */
   var placeInput = document.getElementById("place-input");
   var placeSuggestions = document.getElementById("place-suggestions");
-  var placePlayBtn = document.getElementById("place-play-btn");
+  var personInput = document.getElementById("person-input");
+  var personSuggestions = document.getElementById("person-suggestions");
   var placeDebounce = null;
+  var personDebounce = null;
 
-  function loadPlaceSuggestions(prefix) {
+  function fillDatalist(el, values) {
+    el.innerHTML = "";
+    (values || []).forEach(function (v) {
+      var opt = document.createElement("option");
+      opt.value = v;
+      el.appendChild(opt);
+    });
+  }
+
+  function loadPlaceSuggestions(prefix, into) {
     fetch("/places?q=" + encodeURIComponent(prefix) + "&limit=10")
       .then(function (r) { return r.json(); })
-      .then(function (places) {
-        placeSuggestions.innerHTML = "";
-        (places || []).forEach(function (place) {
-          var opt = document.createElement("option");
-          opt.value = place;
-          placeSuggestions.appendChild(opt);
-        });
-      })
+      .then(function (places) { fillDatalist(into, places); })
       .catch(function () {});
+  }
+
+  function loadPersonSuggestions(prefix, into) {
+    fetch("/people/suggest?q=" + encodeURIComponent(prefix) + "&limit=10")
+      .then(function (r) { return r.json(); })
+      .then(function (names) { fillDatalist(into, names); })
+      .catch(function () {});
+  }
+
+  function filterGridFrom(input) {
+    searchInput.value = input.value;
+    state.q = input.value.trim();
+    state.page = 1;
+    loadGrid();
   }
 
   placeInput.addEventListener("input", function () {
-    var value = placeInput.value;
     if (placeDebounce) window.clearTimeout(placeDebounce);
     placeDebounce = window.setTimeout(function () {
-      loadPlaceSuggestions(value.trim());
-      // Also drive the main browse grid so typing a place filters photos,
-      // same as typing in the filename/year search box.
-      searchInput.value = value;
-      state.q = value.trim();
-      state.page = 1;
-      loadGrid();
+      loadPlaceSuggestions(placeInput.value.trim(), placeSuggestions);
+      filterGridFrom(placeInput);
     }, 350);
   });
-
-  placePlayBtn.addEventListener("click", function () {
-    var place = placeInput.value.trim();
-    if (!place) {
-      showToast("Type a place first.", "err");
-      return;
-    }
-    runControl(
-      placePlayBtn,
-      "/control/play-query?q=" + encodeURIComponent(place) + "&loop=" + isLoop(),
-      "POST",
-      undefined,
-      "...",
-      loopNote('Now showing photos from "' + place + '".')
-    );
-  });
-
-  // Populate suggestions once on load so the datalist isn't empty on first focus.
-  loadPlaceSuggestions("");
-
-  /* ---- People: cards + naming + autocomplete + "play this person" ---- */
-  var peopleGrid = document.getElementById("people-grid");
-  var peopleEmpty = document.getElementById("people-empty");
-  var personInput = document.getElementById("person-input");
-  var personSuggestions = document.getElementById("person-suggestions");
-  var personPlayBtn = document.getElementById("person-play-btn");
-  var personDebounce = null;
-
-  function loadPeople() {
-    fetch("/people")
-      .then(function (r) { return r.json(); })
-      .then(function (people) {
-        peopleGrid.innerHTML = "";
-        peopleEmpty.style.display = (people && people.length) ? "none" : "block";
-        (people || []).forEach(function (person) {
-          var card = document.createElement("div");
-          card.className = "person-card";
-          var img = document.createElement("img");
-          img.src = person.sample_item_id
-            ? "/media/" + person.sample_item_id + "/thumb?size=200"
-            : "";
-          img.alt = person.name || "Unnamed person";
-          card.appendChild(img);
-          var count = document.createElement("div");
-          count.className = "person-count";
-          count.textContent = person.count + " photo" + (person.count === 1 ? "" : "s");
-          card.appendChild(count);
-          var nameInput = document.createElement("input");
-          nameInput.type = "text";
-          nameInput.placeholder = "Name this person";
-          nameInput.value = person.name || "";
-          nameInput.addEventListener("keydown", function (ev) {
-            if (ev.key !== "Enter") return;
-            var newName = nameInput.value.trim();
-            if (!newName) return;
-            fetch("/people/" + person.id + "/name", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: newName }),
-            })
-              .then(function (r) {
-                if (!r.ok) throw new Error("failed");
-                showToast('Named "' + newName + '".', "ok");
-                loadPeople();
-                loadPersonSuggestions("");
-                loadStats();
-              })
-              .catch(function () { showToast("Could not save name.", "err"); });
-          });
-          card.appendChild(nameInput);
-          peopleGrid.appendChild(card);
-        });
-      })
-      .catch(function () {});
-  }
-
-  function loadPersonSuggestions(prefix) {
-    fetch("/people/suggest?q=" + encodeURIComponent(prefix) + "&limit=10")
-      .then(function (r) { return r.json(); })
-      .then(function (names) {
-        personSuggestions.innerHTML = "";
-        (names || []).forEach(function (name) {
-          var opt = document.createElement("option");
-          opt.value = name;
-          personSuggestions.appendChild(opt);
-        });
-      })
-      .catch(function () {});
-  }
 
   personInput.addEventListener("input", function () {
-    var value = personInput.value;
     if (personDebounce) window.clearTimeout(personDebounce);
     personDebounce = window.setTimeout(function () {
-      loadPersonSuggestions(value.trim());
-      // Also drive the main browse grid, same as the place search box.
-      searchInput.value = value;
-      state.q = value.trim();
-      state.page = 1;
-      loadGrid();
+      loadPersonSuggestions(personInput.value.trim(), personSuggestions);
+      filterGridFrom(personInput);
     }, 350);
   });
 
-  personPlayBtn.addEventListener("click", function () {
-    var name = personInput.value.trim();
-    if (!name) {
-      showToast("Type a person's name first.", "err");
-      return;
-    }
-    runControl(
-      personPlayBtn,
+  loadPlaceSuggestions("", placeSuggestions);
+  loadPersonSuggestions("", personSuggestions);
+
+  /* ---- Frame selectors: play a place / person on the frame ---- */
+  var framePlaceInput = document.getElementById("frame-place-input");
+  var framePlaceSuggestions = document.getElementById("frame-place-suggestions");
+  var framePlacePlayBtn = document.getElementById("frame-place-play-btn");
+  var framePersonInput = document.getElementById("frame-person-input");
+  var framePersonSuggestions = document.getElementById("frame-person-suggestions");
+  var framePersonPlayBtn = document.getElementById("frame-person-play-btn");
+  var framePlaceDebounce = null;
+  var framePersonDebounce = null;
+
+  framePlaceInput.addEventListener("input", function () {
+    if (framePlaceDebounce) window.clearTimeout(framePlaceDebounce);
+    framePlaceDebounce = window.setTimeout(function () {
+      loadPlaceSuggestions(framePlaceInput.value.trim(), framePlaceSuggestions);
+    }, 350);
+  });
+  framePersonInput.addEventListener("input", function () {
+    if (framePersonDebounce) window.clearTimeout(framePersonDebounce);
+    framePersonDebounce = window.setTimeout(function () {
+      loadPersonSuggestions(framePersonInput.value.trim(), framePersonSuggestions);
+    }, 350);
+  });
+
+  framePlacePlayBtn.addEventListener("click", function () {
+    var place = framePlaceInput.value.trim();
+    if (!place) { showToast("Type a place first.", "err"); return; }
+    runControl(framePlacePlayBtn,
+      "/control/play-query?q=" + encodeURIComponent(place) + "&loop=" + isLoop(),
+      "POST", undefined, "...",
+      loopNote('Now showing photos from "' + place + '".'));
+  });
+  framePersonPlayBtn.addEventListener("click", function () {
+    var name = framePersonInput.value.trim();
+    if (!name) { showToast("Type a person's name first.", "err"); return; }
+    runControl(framePersonPlayBtn,
       "/control/play-query?q=" + encodeURIComponent(name) + "&loop=" + isLoop(),
-      "POST",
-      undefined,
-      "...",
-      loopNote('Now showing photos of "' + name + '".')
-    );
+      "POST", undefined, "...",
+      loopNote('Now showing photos of "' + name + '".'));
+  });
+
+  loadPlaceSuggestions("", framePlaceSuggestions);
+  loadPersonSuggestions("", framePersonSuggestions);
+
+  /* ---- People: compact collapsible cards, naming, review, merge ---- */
+  var peopleGrid = document.getElementById("people-grid");
+  var peopleEmpty = document.getElementById("people-empty");
+  var peopleToggle = document.getElementById("people-toggle");
+  var peopleBody = document.getElementById("people-body");
+  var peopleShowSmall = document.getElementById("people-show-small");
+  var peopleCache = [];
+
+  peopleToggle.addEventListener("click", function () {
+    var collapsed = peopleBody.classList.toggle("collapsed");
+    peopleToggle.textContent = collapsed ? "Show" : "Hide";
+  });
+  peopleShowSmall.addEventListener("change", loadPeople);
+
+  function postName(personId, newName) {
+    return fetch("/people/" + personId + "/name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+  }
+
+  function refreshPersonDatalists() {
+    loadPersonSuggestions("", personSuggestions);
+    loadPersonSuggestions("", framePersonSuggestions);
+  }
+
+  function makePersonCard(person) {
+    var card = document.createElement("div");
+    card.className = "person-card";
+    var img = document.createElement("img");
+    img.src = person.sample_item_id
+      ? "/media/" + person.sample_item_id + "/thumb?size=200" : "";
+    img.alt = person.name || "Unnamed person";
+    card.appendChild(img);
+    if (person.name) {
+      var nameEl = document.createElement("div");
+      nameEl.className = "person-name";
+      nameEl.textContent = person.name;
+      card.appendChild(nameEl);
+    }
+    var count = document.createElement("div");
+    count.className = "person-count";
+    count.textContent = person.count + " photo" + (person.count === 1 ? "" : "s");
+    card.appendChild(count);
+
+    var actions = document.createElement("div");
+    actions.className = "person-actions";
+    var nameBtn = document.createElement("button");
+    nameBtn.type = "button";
+    nameBtn.textContent = person.name ? "Rename" : "Name";
+    var reviewBtn = document.createElement("button");
+    reviewBtn.type = "button";
+    reviewBtn.textContent = "Review";
+    actions.appendChild(nameBtn);
+    actions.appendChild(reviewBtn);
+    card.appendChild(actions);
+
+    var editWrap = document.createElement("div");
+    editWrap.className = "person-name-edit";
+    var editInput = document.createElement("input");
+    editInput.type = "text";
+    editInput.placeholder = "Name this person";
+    editInput.value = person.name || "";
+    editWrap.appendChild(editInput);
+    card.appendChild(editWrap);
+
+    nameBtn.addEventListener("click", function () {
+      var showing = editWrap.classList.toggle("show");
+      if (showing) editInput.focus();
+    });
+    editInput.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter") return;
+      var newName = editInput.value.trim();
+      if (!newName) return;
+      postName(person.id, newName)
+        .then(function (r) {
+          if (!r.ok) throw new Error("failed");
+          showToast('Named "' + newName + '".', "ok");
+          loadPeople(); loadStats(); refreshPersonDatalists();
+        })
+        .catch(function () { showToast("Could not save name.", "err"); });
+    });
+    reviewBtn.addEventListener("click", function () { openReview(person); });
+    return card;
+  }
+
+  function loadPeople() {
+    var minCount = peopleShowSmall.checked ? 1 : 3;
+    fetch("/people?min_count=" + minCount)
+      .then(function (r) { return r.json(); })
+      .then(function (people) {
+        peopleCache = people || [];
+        peopleGrid.innerHTML = "";
+        peopleEmpty.style.display = peopleCache.length ? "none" : "block";
+        peopleCache.forEach(function (person) {
+          peopleGrid.appendChild(makePersonCard(person));
+        });
+      })
+      .catch(function () {});
+  }
+
+  /* ---- Person review modal (green boxes + reassign + merge) ---- */
+  var reviewBackdrop = document.getElementById("review-backdrop");
+  var reviewClose = document.getElementById("review-close");
+  var reviewTitle = document.getElementById("review-title");
+  var reviewGrid = document.getElementById("review-grid");
+  var reviewName = document.getElementById("review-name");
+  var reviewNameBtn = document.getElementById("review-name-btn");
+  var reviewMergeInput = document.getElementById("review-merge-input");
+  var reviewMergeSuggestions = document.getElementById("review-merge-suggestions");
+  var reviewMergeBtn = document.getElementById("review-merge-btn");
+  var reviewPerson = null;
+
+  function closeReview() {
+    reviewBackdrop.classList.remove("show");
+    reviewPerson = null;
+  }
+  reviewClose.addEventListener("click", closeReview);
+  reviewBackdrop.addEventListener("click", function (ev) {
+    if (ev.target === reviewBackdrop) closeReview();
+  });
+
+  function renderFaceBox(row) {
+    var wrap = document.createElement("div");
+    wrap.className = "review-face";
+    var imgwrap = document.createElement("div");
+    imgwrap.className = "review-face-imgwrap";
+    var img = document.createElement("img");
+    img.src = "/media/" + row.item_id + "/thumb?size=400";
+    var box = document.createElement("div");
+    box.className = "review-face-box";
+    imgwrap.appendChild(img);
+    imgwrap.appendChild(box);
+    wrap.appendChild(imgwrap);
+    function place() {
+      var iw = row.img_w || img.naturalWidth;
+      var ih = row.img_h || img.naturalHeight;
+      if (!iw || !ih || !img.clientWidth) return;
+      var sx = img.clientWidth / iw;
+      var sy = img.clientHeight / ih;
+      box.style.left = (row.bbox[0] * sx) + "px";
+      box.style.top = (row.bbox[1] * sy) + "px";
+      box.style.width = ((row.bbox[2] - row.bbox[0]) * sx) + "px";
+      box.style.height = ((row.bbox[3] - row.bbox[1]) * sy) + "px";
+    }
+    img.addEventListener("load", place);
+    var detach = document.createElement("button");
+    detach.type = "button";
+    detach.textContent = "Not this person";
+    detach.addEventListener("click", function () {
+      fetch("/faces/" + row.face_id + "/reassign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ person_id: null }),
+      })
+        .then(function (r) {
+          if (!r.ok) throw new Error("failed");
+          showToast("Removed from this person.", "ok");
+          openReview(reviewPerson); loadPeople(); loadStats();
+        })
+        .catch(function () { showToast("Could not update.", "err"); });
+    });
+    wrap.appendChild(detach);
+    return wrap;
+  }
+
+  function openReview(person) {
+    reviewPerson = person;
+    reviewTitle.textContent = "Review: " + (person.name || "Unnamed person");
+    reviewName.value = person.name || "";
+    reviewMergeInput.value = "";
+    reviewBackdrop.classList.add("show");
+    reviewMergeSuggestions.innerHTML = "";
+    peopleCache.forEach(function (p) {
+      if (p.id !== person.id && p.name) {
+        var opt = document.createElement("option");
+        opt.value = p.name;
+        reviewMergeSuggestions.appendChild(opt);
+      }
+    });
+    reviewGrid.textContent = "Loading...";
+    fetch("/people/" + person.id + "/photos")
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        reviewGrid.innerHTML = "";
+        (rows || []).forEach(function (row) {
+          reviewGrid.appendChild(renderFaceBox(row));
+        });
+        if (!rows || !rows.length) reviewGrid.textContent = "No photos.";
+      })
+      .catch(function () { reviewGrid.textContent = "Could not load photos."; });
+  }
+
+  reviewNameBtn.addEventListener("click", function () {
+    if (!reviewPerson) return;
+    var newName = reviewName.value.trim();
+    if (!newName) { showToast("Type a name first.", "err"); return; }
+    postName(reviewPerson.id, newName)
+      .then(function (r) {
+        if (!r.ok) throw new Error("failed");
+        showToast('Named "' + newName + '".', "ok");
+        reviewPerson.name = newName;
+        reviewTitle.textContent = "Review: " + newName;
+        loadPeople(); loadStats(); refreshPersonDatalists();
+      })
+      .catch(function () { showToast("Could not save name.", "err"); });
+  });
+
+  reviewMergeBtn.addEventListener("click", function () {
+    if (!reviewPerson) return;
+    var targetName = reviewMergeInput.value.trim();
+    if (!targetName) { showToast("Choose a person to merge into.", "err"); return; }
+    var target = null;
+    peopleCache.forEach(function (p) {
+      if (p.name && p.name.toLowerCase() === targetName.toLowerCase()
+          && p.id !== reviewPerson.id) target = p;
+    });
+    if (!target) { showToast("No matching person to merge into.", "err"); return; }
+    fetch("/people/" + target.id + "/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from_id: reviewPerson.id }),
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("failed");
+        showToast('Merged into "' + target.name + '".', "ok");
+        closeReview(); loadPeople(); loadStats();
+      })
+      .catch(function () { showToast("Could not merge.", "err"); });
   });
 
   loadPeople();
-  loadPersonSuggestions("");
 
   pagePrev.addEventListener("click", function () {
     if (state.page > 1) {
@@ -2639,21 +3010,17 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   if (MALMBERG_ROLE === "display") {
     var displaySelectRow = document.getElementById("display-select-row");
     if (displaySelectRow) displaySelectRow.style.display = "none";
-    var yearFilterRow = document.getElementById("year-filter-row");
-    if (yearFilterRow) yearFilterRow.style.display = "none";
+    // The whole "show on the frame" group (year/place/person play shortcuts)
+    // uses /control/play-query, a server-only proxy path; hide it on the
+    // display's own page. The library search boxes and stats chips stay.
+    var frameFilterGroup = document.getElementById("frame-filter-group");
+    if (frameFilterGroup) frameFilterGroup.style.display = "none";
     var playlistsSection = document.getElementById("playlists-section");
     if (playlistsSection) playlistsSection.style.display = "none";
     var bulkAddPlaylistBtn = document.getElementById("bulk-add-playlist");
     if (bulkAddPlaylistBtn) bulkAddPlaylistBtn.style.display = "none";
     var actAddPlaylistBtn = document.getElementById("act-add-playlist");
     if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
-    // "Play this place" uses /control/play-query, a server-only proxy path
-    // (like the year-filter shortcuts); hide it on the display's own page.
-    var placePlayBtnEl = document.getElementById("place-play-btn");
-    if (placePlayBtnEl) placePlayBtnEl.style.display = "none";
-    // Same story for "Play this person".
-    var personPlayBtnEl = document.getElementById("person-play-btn");
-    if (personPlayBtnEl) personPlayBtnEl.style.display = "none";
   }
 
   loadStats();

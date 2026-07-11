@@ -21,8 +21,9 @@ from malmberg_core.models import HidePolicy, MediaItem, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
+from malmberg_server.faces.faces_index import FaceStore
 from malmberg_server.faces.people import PersonStore
-from malmberg_server.faces.worker import run_face_worker
+from malmberg_server.faces.worker import run_face_worker, sync_person_ids
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import make_thumbnail
 from malmberg_server.ingest.playlists import PlaylistStore
@@ -92,6 +93,22 @@ class PersonNameRequest(BaseModel):
     name: str
 
 
+class FaceReassignRequest(BaseModel):
+    """Request body for POST /faces/{face_id}/reassign.
+
+    *person_id* None (or omitted) detaches the face onto a brand-new unnamed
+    person ("not this person"); a value reassigns it to that existing person.
+    """
+
+    person_id: Optional[str] = None
+
+
+class PersonMergeRequest(BaseModel):
+    """Request body for POST /people/{person_id}/merge (merge *from_id* into it)."""
+
+    from_id: str
+
+
 class ServerStatus(BaseModel):
     """Response body for GET /status."""
 
@@ -125,17 +142,25 @@ def _raise_ingest(err: IngestError) -> None:
     raise HTTPException(status_code=status, detail=detail)
 
 
-def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
+def build_app(
+    cfg: ServerConfig,
+    store: Optional[MediaStore] = None,
+    people: Optional[PersonStore] = None,
+    faces: Optional[FaceStore] = None,
+) -> FastAPI:
     """Build and return the FastAPI application wired to *cfg* and *store*.
 
     If *store* is None a new empty MediaStore is created.  Pass an existing
-    store (e.g. pre-loaded from disk) when resuming across restarts.
+    store (e.g. pre-loaded from disk) when resuming across restarts. *people*
+    and *faces* may likewise be pre-seeded (used by tests to exercise the
+    /people and /faces endpoints without running the background worker).
     """
     app = FastAPI(title="Malmberg Server", version=__version__)
     _start = datetime.now(timezone.utc)
     _store = store if store is not None else MediaStore()
     _playlists = PlaylistStore()
-    _people = PersonStore()
+    _people = people if people is not None else PersonStore()
+    _faces = faces if faces is not None else FaceStore()
     # Named displays for multi-display control (a lone display_url counts as one).
     _displays: dict[str, str] = (
         dict(cfg.displays)
@@ -166,24 +191,44 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     def _people_path() -> Path:
         return cfg.fs_root / "logs" / "people.jsonl"
 
+    def _faces_path() -> Path:
+        return cfg.fs_root / "logs" / "faces.jsonl"
+
     _playlists.load_from_disk(_playlists_path())
     _people.load_from_disk(_people_path())
+    _faces.load_from_disk(_faces_path())
 
     def _save_playlists() -> None:
         save = _playlists.save_to_disk(_playlists_path())
         if save.is_err:
             _log.error("Failed to persist playlists")
 
+    def _save_faces_state() -> None:
+        """Persist people + faces + media index together after a face mutation."""
+        if _people.save_to_disk(_people_path()).is_err:
+            _log.error("Failed to persist people index")
+        if _faces.save_to_disk(_faces_path()).is_err:
+            _log.error("Failed to persist faces index")
+        if _store.save_to_disk(_index_path()).is_err:
+            _log.error("Failed to persist media index after face mutation")
+
     @app.on_event("startup")
     async def _start_face_worker() -> None:
         """Kick off the background face-detection walker (see faces.worker).
 
         Runs off the request path: uploads return immediately and this task
-        fills in person_ids asynchronously, batch by batch, forever.
+        fills in the per-face index and person groups asynchronously, batch by
+        batch, forever.
         """
         asyncio.create_task(
             run_face_worker(
-                _store, _people, _media_root(), _index_path(), _people_path()
+                _store,
+                _people,
+                _faces,
+                _media_root(),
+                _index_path(),
+                _people_path(),
+                _faces_path(),
             )
         )
 
@@ -258,10 +303,96 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         return _store.places(q=q, limit=limit)
 
     @app.get("/people")
-    async def list_people() -> list[dict]:
+    async def list_people(
+        min_count: int = Query(default=3, ge=0, le=1000),
+    ) -> list[dict]:
         """List detected people: id, name (None if unnamed), photo count,
-        sample thumbnail id."""
-        return _people.list(counts_by_person=_store.counts_by_person())
+        sample thumbnail id.
+
+        *min_count* (default 3) hides small/uncertain clusters from the main
+        list -- those groups are kept on disk and keep accruing new matching
+        faces, they are just not surfaced for naming until confident. Named
+        people are always included. Pass min_count=1 to fetch the small ones.
+        """
+        return _people.list(
+            counts_by_person=_store.counts_by_person(), min_count=min_count
+        )
+
+    @app.get("/people/{person_id}/photos")
+    async def person_photos(person_id: str) -> list[dict]:
+        """Every face flagged for *person_id*, for the review + green-box UI.
+
+        Returns [{item_id, face_id, bbox, img_w, img_h}, ...] -- bbox is in
+        source pixels and img_w/img_h are the photo's pixel dimensions so the
+        dashboard can scale a green rectangle onto the rendered image.
+        """
+        if _people.get(person_id) is None:
+            raise HTTPException(status_code=404, detail="Person not found")
+        out = []
+        for face in _faces.faces_for_person(person_id):
+            item = _store.get(face["item_id"])
+            if item is None:
+                continue
+            out.append(
+                {
+                    "item_id": face["item_id"],
+                    "face_id": face["face_id"],
+                    "bbox": face["bbox"],
+                    "img_w": item.meta.width,
+                    "img_h": item.meta.height,
+                }
+            )
+        return out
+
+    @app.post("/people/{person_id}/merge")
+    async def merge_people(person_id: str, body: PersonMergeRequest) -> dict:
+        """Merge person *body.from_id* into *person_id* (fix an over-split)."""
+        result = _people.merge(person_id, body.from_id, _faces)
+        if result.is_err:
+            raise HTTPException(status_code=404, detail="Person not found")
+        sync_person_ids(_store, _faces)
+        _save_faces_state()
+        return result.danger_ok.model_dump(mode="json")
+
+    @app.post("/people/recluster")
+    async def recluster_people() -> dict:
+        """Rebuild all person groups from the per-face index (order-independent).
+
+        Runs the connected-components recluster in a thread executor so the
+        event loop is never blocked, preserving user-assigned names. Idempotent.
+        """
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _people.recluster, _faces)
+        sync_person_ids(_store, _faces)
+        _save_faces_state()
+        return {"status": "reclustered", "people": len(_people), "faces": len(_faces)}
+
+    @app.post("/faces/{face_id}/reassign")
+    async def reassign_face(face_id: str, body: FaceReassignRequest) -> dict:
+        """Override a single face's person: reassign to another, or detach.
+
+        *body.person_id* None detaches the face onto a new unnamed person
+        ("not this person"); a value reassigns it to that existing person.
+        Both affected persons' centroids/counts are recomputed and empty
+        unnamed persons pruned.
+        """
+        entry = _faces.get(face_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Face not found")
+        old_pid = entry.person_id
+        if body.person_id is None:
+            new_pid = _people.create_person()
+        else:
+            if _people.get(body.person_id) is None:
+                raise HTTPException(status_code=404, detail="Target person not found")
+            new_pid = body.person_id
+        _faces.set_person(face_id, new_pid)
+        _people.recompute_person(old_pid, _faces)
+        _people.recompute_person(new_pid, _faces)
+        _people.prune_empty()
+        sync_person_ids(_store, _faces)
+        _save_faces_state()
+        return {"status": "reassigned", "face_id": face_id, "person_id": new_pid}
 
     @app.post("/people/{person_id}/name")
     async def name_person(person_id: str, body: PersonNameRequest) -> dict:

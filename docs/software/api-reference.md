@@ -171,6 +171,12 @@ suggestions.
 List detected people (see "Face detection and search by person" below).
 Backs the dashboard's "People" section.
 
+**Query parameters**
+
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| `min_count` | int | `3` | 0--1000 | Hide clusters with fewer than this many photos (small/uncertain groups). Named people are always included. Pass `min_count=1` to fetch the small ones on demand. |
+
 **Response:** `list[dict]`, each with:
 
 | Field | Type | Description |
@@ -179,6 +185,74 @@ Backs the dashboard's "People" section.
 | `name` | str \| null | User-assigned display name; null until named |
 | `count` | int | Distinct photos this person appears in |
 | `sample_item_id` | str \| null | A media item id to use as a thumbnail |
+
+Small clusters are never deleted or frozen: the worker keeps assigning new
+matching faces to them, so a group can grow past `min_count` over time and
+then become nameable. `min_count` is purely a display gate.
+
+---
+
+### `GET /people/{id}/photos`
+
+Every face flagged for a person, for the dashboard review UI (green-box
+overlay). Returns one row per face.
+
+**Path parameters:** `id` -- the person id.
+
+**Response:** `list[dict]`, each with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `item_id` | str | Media item the face is in |
+| `face_id` | str | Per-face record id (for `POST /faces/{id}/reassign`) |
+| `bbox` | [int, int, int, int] | Face box `[x1, y1, x2, y2]` in source pixels |
+| `img_w` | int \| null | Source image width (to scale the box onto the render) |
+| `img_h` | int \| null | Source image height |
+
+**Errors:** `404` -- unknown person id.
+
+---
+
+### `POST /faces/{face_id}/reassign`
+
+Per-face manual override. Move one face to a different person, or detach it.
+
+**Path parameters:** `face_id` -- from `GET /people/{id}/photos`.
+
+**Request body:** `{"person_id": str | null}` -- a person id reassigns the
+face to that existing person; `null` (or omitted) detaches it onto a new
+unnamed person ("not this person"). Both affected people have their
+centroid/count recomputed and empty unnamed people are pruned.
+
+**Response:** `{"status": "reassigned", "face_id": ..., "person_id": ...}`.
+
+**Errors:** `404` -- unknown face id, or a given target person id is unknown.
+
+---
+
+### `POST /people/{id}/merge`
+
+Merge one person into another (fix an over-split). Reassigns every face of
+`from_id` to `{id}`, drops `from_id`, and keeps `{id}`'s name.
+
+**Path parameters:** `id` -- the surviving person id.
+
+**Request body:** `{"from_id": str}` -- the person to merge in and remove.
+
+**Response:** the surviving Person record.
+
+**Errors:** `404` -- either id unknown, or the two ids are equal.
+
+---
+
+### `POST /people/recluster`
+
+Rebuild all person groups from the per-face index using order-independent
+single-linkage connected components (see below). Idempotent; user-assigned
+names are preserved. Runs the clustering in a thread executor so the event
+loop is never blocked.
+
+**Response:** `{"status": "reclustered", "people": int, "faces": int}`.
 
 ---
 
@@ -431,6 +505,7 @@ passed through unchanged.
 | `trash_path` | str \| null | `null` | Relative path under `/fs/.trash/` where a trashed item's file currently lives; `null` when not trashed. New fields default to `null` so index lines written before this field existed still parse unchanged. |
 | `person_ids` | list[str] | `[]` | IDs of detected `Person` records (see "Face detection and search by person" below); populated asynchronously by the background face worker, not at ingest time |
 | `faces_processed` | bool | `false` | Whether the background face worker has attempted detection on this item at least once |
+| `faces_version` | int | `0` | Face-pipeline version this item was last processed with; items behind `FACE_PROCESSING_VERSION` are transparently reprocessed by the worker (self-heal after a model/threshold/schema change) |
 
 ### `MediaMetadata`
 
@@ -500,44 +575,69 @@ package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
 Faces are detected and clustered into people entirely server-side, entirely
 offline, and entirely off the request path.
 
-- **Stack:** `insightface` (RetinaFace detector + ArcFace 512-d embedder,
-  `buffalo_s` model pack) on CPU via `onnxruntime`. Both live under a
-  dedicated `faces` optional extra in `pyproject.toml`, installed on the
-  server only with `uv sync --extra faces`. The Pi display never installs
-  it and `malmberg_display` never imports `malmberg_server.faces.detect` --
-  the display's dashboard only talks to the server's `/people*` endpoints
-  over HTTP, same as it does for `/places`.
+- **Stack:** `insightface` on CPU via `onnxruntime`, using the `buffalo_l`
+  model pack (larger RetinaFace detector + ArcFace 512-d embedder -- notably
+  better embeddings than `buffalo_s`; the x86_64 server has the headroom, the
+  Pi never runs this). The pack name is the single constant
+  `malmberg_server.faces.detect.MODEL_PACK`; it downloads once on first use
+  into `fs_root/.faces/models`. Both packages live under a dedicated `faces`
+  optional extra in `pyproject.toml`, installed on the server only with
+  `uv sync --extra faces`. The Pi display never installs it and
+  `malmberg_display` never imports `malmberg_server.faces.detect` -- the
+  display's dashboard only talks to the server's `/people*` and `/faces*`
+  endpoints over HTTP, same as it does for `/places`.
 - The model-pack import is best-effort (`malmberg_server.faces.detect`,
   `try`/`except ImportError`, mirroring `reverse_geocode`): if the extra is
   not installed, or model load / a single detection call fails for any
   reason, a warning is logged and `detect_faces()` returns `[]` -- it never
   raises into its caller.
+- **Quality filtering:** detections below `MIN_DET_SCORE` (detector
+  confidence, `0.6`) or smaller than `MIN_FACE_AREA_FRAC` of the image
+  (`0.005`, i.e. tiny background faces) are dropped before clustering, since
+  they otherwise create spurious singleton people and mis-groupings.
+- **Per-face index:** `malmberg_server.faces.faces_index.FaceStore` persists
+  one record per detected face at `logs/faces.jsonl` -- `{face_id, item_id,
+  person_id, bbox, det_score, embedding}`. This is the source of truth for
+  face -> person membership; a `Person`'s centroid/count are always *derived*
+  from it, which is what makes order-independent reclustering and per-face
+  overrides recompute cleanly.
 - **Background processing, never inline:** `malmberg_server.faces.worker`
   runs as an asyncio background task (started from the server's FastAPI
-  startup event), sweeping the media index in small batches for items with
-  `faces_processed == False`. Each item's actual `detect_faces()` call runs
-  in a thread executor (`loop.run_in_executor`), so the event loop -- and
-  uploads -- are never blocked on the ML model. `POST /upload` always
-  returns immediately; faces fill in afterward.
-- **Grouping:** `malmberg_server.faces.people.PersonStore` does simple
-  online nearest-centroid clustering by cosine similarity (threshold
-  `0.5`) against each existing person's running-average embedding centroid
-  -- adequate for a personal library of hundreds of photos, no heavyweight
-  clustering library needed. A face that doesn't match any existing person
-  closely enough starts a new, initially-unnamed, `Person`. Persisted as
-  JSON-lines at `logs/people.jsonl` (same pattern as `logs/playlists.json`
-  / `logs/media-index.jsonl`).
-- Each `MediaItem` carries `person_ids: list[str]` (people detected in it)
-  and `faces_processed: bool` (whether the worker has looked at it yet).
-  These are plain new fields with safe defaults (`[]` / `false`), not part
-  of `MediaMetadata`'s schema-refresh cycle -- face processing is
-  comparatively expensive, so it is only ever done by the background
+  startup event), sweeping the media index in small batches for items that
+  are unprocessed *or* were processed by an older `FACE_PROCESSING_VERSION`.
+  Each item's actual `detect_faces()` call runs in a thread executor
+  (`loop.run_in_executor`), so the event loop -- and uploads -- are never
+  blocked. `POST /upload` returns immediately; faces fill in afterward.
+- **Online grouping:** `PersonStore.assign` uses single-linkage
+  max-similarity -- a new face joins the existing person with the highest
+  cosine similarity to *any one* of that person's stored face embeddings, if
+  that similarity is at least `cluster.SIMILARITY_THRESHOLD` (`0.4`, tuned for
+  buffalo_l L2-normalized ArcFace; max-linkage tracks a person across pose and
+  lighting far better than a drifting running-average centroid). Otherwise a
+  new unnamed `Person` is created. Persisted at `logs/people.jsonl`.
+- **Batch recluster:** once the worker drains its backlog it runs one
+  `PersonStore.recluster` -- order-independent single-linkage connected
+  components (`cluster.connected_components`) over every stored embedding --
+  so the final groups do not depend on ingest order. It also runs on demand
+  via `POST /people/recluster`. User-assigned names are preserved by matching
+  each rebuilt cluster to the old person the plurality of its faces belonged
+  to. This is also how a model or threshold change takes effect on the
+  existing library, via the reprocess (`FACE_PROCESSING_VERSION`) + recluster
+  self-heal path -- no manual step.
+- **Manual overrides:** `POST /faces/{id}/reassign` moves or detaches a single
+  face; `POST /people/{id}/merge` merges two people. Both recompute the
+  affected people from the per-face index and re-project `person_ids` onto the
+  media items.
+- Each `MediaItem` carries `person_ids: list[str]` (people detected in it),
+  `faces_processed: bool`, and `faces_version: int`. These are plain fields
+  with safe defaults, not part of `MediaMetadata`'s schema-refresh cycle --
+  face processing is expensive, so it is only ever done by the background
   worker, never by the lazy per-request metadata refresh described above.
 - `person_ids` (resolved to names via `PersonStore`) feed `GET /media?q=`,
-  `GET /stats` (`by_person`), `GET /people`, and `GET /people/suggest` --
-  see those endpoints above. `POST /control/play-query?q=<name>` plays a
-  named person's photos on the frame exactly like it does for a place or
-  year, since person names are matched by the same `_matches_query`.
+  `GET /stats` (`by_person`), `GET /people`, and `GET /people/suggest`.
+  `POST /control/play-query?q=<name>` plays a named person's photos on the
+  frame exactly like it does for a place or year, since person names are
+  matched by the same `_matches_query`.
 
 ---
 
@@ -671,8 +771,12 @@ below responds `503`.
 | `GET /media/{id}/info` | `GET /media/{id}/info` |
 | `GET /stats` | `GET /stats` |
 | `GET /places` | `GET /places` (query params passed through) |
-| `GET /people` | `GET /people` |
+| `GET /people` | `GET /people` (query params passed through) |
+| `GET /people/{id}/photos` | `GET /people/{id}/photos` |
 | `POST /people/{id}/name` | `POST /people/{id}/name` |
+| `POST /people/{id}/merge` | `POST /people/{id}/merge` |
+| `POST /people/recluster` | `POST /people/recluster` |
+| `POST /faces/{id}/reassign` | `POST /faces/{id}/reassign` |
 | `GET /people/suggest` | `GET /people/suggest` (query params passed through) |
 | `DELETE /media/{id}` | `DELETE /media/{id}` (`?permanent=` passed through) |
 | `POST /media/{id}/restore` | `POST /media/{id}/restore` |

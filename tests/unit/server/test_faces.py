@@ -1,7 +1,12 @@
-"""Tests for malmberg_server.faces (person index, detection fallback, search)."""
+"""Tests for malmberg_server.faces: clustering, per-face index, overrides, endpoints.
+
+All ML is stubbed -- detect_faces is monkeypatched to return synthetic
+FaceRecords, so nothing here needs the `faces` extra (no insightface / numpy).
+"""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -10,19 +15,68 @@ from fastapi.testclient import TestClient
 from malmberg_core.models import MediaItem, MediaMetadata
 from malmberg_server.api.routes import build_app
 from malmberg_server.app.config import ServerConfig
-from malmberg_server.faces.detect import detect_faces
-from malmberg_server.faces.people import PersonStore
+from malmberg_server.faces import worker as worker_mod
+from malmberg_server.faces.cluster import (
+    connected_components,
+    cosine_similarity,
+    max_similarity,
+)
+from malmberg_server.faces.detect import FaceRecord, detect_faces
+from malmberg_server.faces.faces_index import FaceEntry, FaceStore
+from malmberg_server.faces.people import Person, PersonStore
 from malmberg_server.ingest.store import MediaStore
 
+
+def _unit(vec: list[float]) -> list[float]:
+    norm = sum(v * v for v in vec) ** 0.5
+    return [v / norm for v in vec]
+
+
+def _assign(people: PersonStore, faces: FaceStore, emb: list[float], item: str) -> str:
+    """Assign a synthetic face embedding to a person via the store API."""
+    return people.assign(faces, emb, (0, 0, 10, 10), 0.99, item)
+
+
 # ---------------------------------------------------------------------------
-# detect_faces: must degrade gracefully without the `faces` extra
+# cluster primitives
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_similarity_basics() -> None:
+    assert cosine_similarity([1, 0], [1, 0]) == pytest.approx(1.0)
+    assert cosine_similarity([1, 0], [0, 1]) == pytest.approx(0.0)
+    assert cosine_similarity([], [1]) == -1.0
+
+
+def test_max_similarity_picks_best() -> None:
+    e = _unit([1, 0, 0])
+    cands = [_unit([0, 1, 0]), _unit([0.9, 0.1, 0])]
+    assert max_similarity(e, cands) == pytest.approx(cosine_similarity(e, cands[1]))
+    assert max_similarity(e, []) == -1.0
+
+
+def test_connected_components_single_linkage() -> None:
+    a = _unit([1, 0, 0, 0])
+    b = _unit([0.95, 0.05, 0, 0])
+    c = _unit([0, 0, 1, 0])
+    comps = connected_components([a, b, c], threshold=0.4)
+    assert sorted(len(g) for g in comps) == [1, 2]
+
+
+def test_connected_components_chain_merges() -> None:
+    a = _unit([1, 0, 0])
+    b = _unit([0.6, 0.8, 0])
+    c = _unit([0, 1, 0])
+    comps = connected_components([a, b, c], threshold=0.4)
+    assert len(comps) == 1
+
+
+# ---------------------------------------------------------------------------
+# detect_faces graceful degradation (no `faces` extra)
 # ---------------------------------------------------------------------------
 
 
 def test_detect_faces_without_extra_returns_empty(tmp_path: Path, monkeypatch) -> None:
-    """When insightface cannot be imported, detect_faces must return []
-    rather than raise, regardless of whether the extra happens to be
-    installed in the current test environment."""
     import malmberg_server.faces.detect as detect_mod
 
     monkeypatch.setattr(detect_mod, "_analyzer", False)
@@ -32,253 +86,361 @@ def test_detect_faces_without_extra_returns_empty(tmp_path: Path, monkeypatch) -
 
 
 def test_detect_faces_missing_file_returns_empty(tmp_path: Path) -> None:
-    """A nonexistent path must never raise -- always degrades to []."""
     assert detect_faces(tmp_path / "nope.jpg", tmp_path / "models") == []
 
 
 # ---------------------------------------------------------------------------
-# PersonStore: online clustering
+# FaceStore
 # ---------------------------------------------------------------------------
 
 
-def _unit(vec: list[float]) -> list[float]:
-    norm = sum(v * v for v in vec) ** 0.5
-    return [v / norm for v in vec]
+def test_face_store_queries_and_persistence(tmp_path: Path) -> None:
+    faces = FaceStore()
+    faces.add(
+        FaceEntry(item_id="i1", person_id="p1", bbox=(1, 2, 3, 4), embedding=[1.0])
+    )
+    faces.add(
+        FaceEntry(item_id="i1", person_id="p2", bbox=(5, 6, 7, 8), embedding=[0.0])
+    )
+    faces.add(
+        FaceEntry(item_id="i2", person_id="p1", bbox=(0, 0, 1, 1), embedding=[1.0])
+    )
+
+    assert {f["person_id"] for f in faces.faces_for_item("i1")} == {"p1", "p2"}
+    assert faces.person_ids_for_item("i1") == ["p1", "p2"]
+    assert sorted(faces.item_ids_for_person("p1")) == ["i1", "i2"]
+    assert len(faces.faces_for_person("p1")) == 2
+
+    path = tmp_path / "faces.jsonl"
+    assert faces.save_to_disk(path).is_ok
+    reloaded = FaceStore()
+    assert reloaded.load_from_disk(path).danger_ok == 3
+    assert reloaded.person_ids_for_item("i1") == ["p1", "p2"]
 
 
-def test_person_store_clusters_near_embeddings_together() -> None:
-    people = PersonStore()
-    base = _unit([1.0, 0.0, 0.0, 0.0])
-    near = _unit([0.95, 0.05, 0.0, 0.0])
+def test_face_store_remove_for_item() -> None:
+    faces = FaceStore()
+    faces.add(FaceEntry(item_id="i1", person_id="p1", bbox=(0, 0, 1, 1)))
+    faces.add(FaceEntry(item_id="i2", person_id="p1", bbox=(0, 0, 1, 1)))
+    removed = faces.remove_for_item("i1")
+    assert len(removed) == 1
+    assert len(faces) == 1
 
-    pid1 = people.assign_face(base, "item-1")
-    pid2 = people.assign_face(near, "item-2")
 
-    assert pid1 == pid2
+# ---------------------------------------------------------------------------
+# PersonStore: online assignment (max-linkage) + recompute
+# ---------------------------------------------------------------------------
+
+
+def test_assign_clusters_near_and_separates_far() -> None:
+    people, faces = PersonStore(), FaceStore()
+    base = _unit([1, 0, 0, 0])
+    near = _unit([0.95, 0.05, 0, 0])
+    far = _unit([0, 1, 0, 0])
+
+    p1 = _assign(people, faces, base, "i1")
+    p2 = _assign(people, faces, near, "i2")
+    p3 = _assign(people, faces, far, "i3")
+
+    assert p1 == p2
+    assert p3 != p1
+    assert len(people) == 2
+    assert people.get(p1).face_count == 2
+
+
+def test_recompute_and_prune_empty() -> None:
+    people, faces = PersonStore(), FaceStore()
+    pid = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    faces.remove_for_item("i1")
+    people.recompute_all(faces)
+    assert people.get(pid) is None
+    assert len(people) == 0
+
+
+# ---------------------------------------------------------------------------
+# Recluster (order-independent) preserves names
+# ---------------------------------------------------------------------------
+
+
+def test_recluster_merges_oversplit_and_keeps_name() -> None:
+    people, faces = PersonStore(), FaceStore()
+    a = _unit([1, 0, 0, 0])
+    b = _unit([0.96, 0.02, 0.01, 0])
+    faces.add(FaceEntry(item_id="i1", person_id="pA", bbox=(0, 0, 1, 1), embedding=a))
+    faces.add(FaceEntry(item_id="i2", person_id="pB", bbox=(0, 0, 1, 1), embedding=b))
+    people._people["pA"] = Person(id="pA", name="Grandma", face_count=1)
+    people._people["pB"] = Person(id="pB", face_count=1)
+
+    people.recluster(faces)
+
     assert len(people) == 1
+    surviving = next(iter(people._people.values()))
+    assert surviving.name == "Grandma"
+    assert surviving.face_count == 2
+    assert len(faces.faces_for_person(surviving.id)) == 2
 
 
-def test_person_store_separates_far_embeddings() -> None:
-    people = PersonStore()
-    a = _unit([1.0, 0.0, 0.0, 0.0])
-    b = _unit([0.0, 1.0, 0.0, 0.0])
-
-    pid1 = people.assign_face(a, "item-1")
-    pid2 = people.assign_face(b, "item-2")
-
-    assert pid1 != pid2
+def test_recluster_splits_distinct_people() -> None:
+    people, faces = PersonStore(), FaceStore()
+    a = _unit([1, 0, 0, 0])
+    b = _unit([0, 1, 0, 0])
+    faces.add(FaceEntry(item_id="i1", person_id="p0", bbox=(0, 0, 1, 1), embedding=a))
+    faces.add(FaceEntry(item_id="i2", person_id="p0", bbox=(0, 0, 1, 1), embedding=b))
+    people._people["p0"] = Person(id="p0", face_count=2)
+    people.recluster(faces)
     assert len(people) == 2
 
 
-def test_person_store_rename_and_query() -> None:
-    people = PersonStore()
-    vec = _unit([1.0, 0.2, 0.3, 0.1])
-    pid = people.assign_face(vec, "item-1")
+# ---------------------------------------------------------------------------
+# Manual overrides: reassign + merge
+# ---------------------------------------------------------------------------
 
-    result = people.rename(pid, "Grandma")
+
+def test_merge_people() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+    people.rename(p1, "Alice")
+
+    result = people.merge(p1, p2, faces)
     assert result.is_ok
-    assert result.danger_ok.name == "Grandma"
-
-    listed = people.list()
-    assert listed[0]["id"] == pid
-    assert listed[0]["name"] == "Grandma"
-    assert listed[0]["sample_item_id"] == "item-1"
+    assert people.get(p2) is None
+    assert people.get(p1).face_count == 2
+    assert people.get(p1).name == "Alice"
 
 
-def test_person_store_rename_not_found() -> None:
-    people = PersonStore()
-    result = people.rename("nope", "Someone")
-    assert result.is_err
-
-
-def test_person_store_suggest_and_find_by_name() -> None:
-    people = PersonStore()
-    pid1 = people.assign_face(_unit([1, 0, 0, 0]), "i1")
-    pid2 = people.assign_face(_unit([0, 1, 0, 0]), "i2")
-    people.rename(pid1, "Alice")
-    people.rename(pid2, "Alicia")
-
-    assert set(people.suggest(q="ali")) == {"Alice", "Alicia"}
-    assert people.suggest(q="bob") == []
-    assert len(people.find_by_name("alice")) == 1
-
-
-def test_person_store_persistence(tmp_path: Path) -> None:
-    people = PersonStore()
-    pid = people.assign_face(_unit([1, 0, 0, 0]), "item-1")
-    people.rename(pid, "Bob")
-
-    path = tmp_path / "people.jsonl"
-    save = people.save_to_disk(path)
-    assert save.is_ok
-
-    reloaded = PersonStore()
-    load = reloaded.load_from_disk(path)
-    assert load.is_ok
-    assert load.danger_ok == 1
-    assert reloaded.get(pid).name == "Bob"
+def test_merge_unknown_person() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    assert people.merge(p1, "nope", faces).is_err
+    assert people.merge(p1, p1, faces).is_err
 
 
 # ---------------------------------------------------------------------------
-# MediaStore integration: search-by-person and by_person stats
+# min_count gate
 # ---------------------------------------------------------------------------
 
 
-def _make_item(**kwargs) -> MediaItem:
+def test_list_min_count_hides_small_but_keeps_named() -> None:
+    people, faces = PersonStore(), FaceStore()
+    big = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    _assign(people, faces, _unit([0.98, 0.02, 0]), "i2")
+    _assign(people, faces, _unit([0.99, 0.01, 0]), "i3")
+    small = _assign(people, faces, _unit([0, 1, 0]), "i4")
+    people.rename(small, "Tiny")
+
+    counts = {big: 3, small: 1}
+    ids = {p["id"] for p in people.list(counts, min_count=3)}
+    assert big in ids
+    assert small in ids  # named -> always shown
+
+    people.rename(small, "")  # clear name
+    assert small not in {p["id"] for p in people.list(counts, min_count=3)}
+    assert small in {p["id"] for p in people.list(counts, min_count=1)}
+
+
+# ---------------------------------------------------------------------------
+# Worker pipeline (real worker functions, stubbed detect_faces)
+# ---------------------------------------------------------------------------
+
+
+def _make_item(item_id: str, **kwargs) -> MediaItem:
     defaults = dict(
+        id=item_id,
         kind="image",
-        filename="photo.jpg",
-        server_path="2024/01/01/photo.jpg",
+        filename=f"{item_id}.jpg",
+        server_path=f"p/{item_id}.jpg",
+        meta=MediaMetadata(sha256=item_id, width=100, height=100),
     )
     defaults.update(kwargs)
     return MediaItem(**defaults)
 
 
-def test_matches_query_person_name() -> None:
-    people = PersonStore()
-    pid = people.assign_face(_unit([1, 0, 0, 0]), "item-1")
+def test_worker_process_one_populates_faces(tmp_path: Path, monkeypatch) -> None:
+    store, people, faces = MediaStore(), PersonStore(), FaceStore()
+    media_root = tmp_path / "media"
+    (media_root / "p").mkdir(parents=True)
+    (media_root / "p" / "i1.jpg").write_bytes(b"x")
+    store.add(_make_item("i1"))
+
+    emb = _unit([1, 0, 0, 0])
+    monkeypatch.setattr(
+        worker_mod,
+        "detect_faces",
+        lambda path, model_root: [
+            FaceRecord(bbox=(1, 2, 3, 4), embedding=emb, det_score=0.9)
+        ],
+    )
+
+    asyncio.run(
+        worker_mod._process_one(
+            store, people, faces, "i1", media_root, tmp_path / "models"
+        )
+    )
+
+    item = store.get("i1")
+    assert item.faces_processed is True
+    assert item.faces_version == worker_mod.FACE_PROCESSING_VERSION
+    assert len(item.person_ids) == 1
+    assert len(faces) == 1
+    assert faces.all()[0].bbox == (1, 2, 3, 4)
+
+
+def test_worker_reprocess_replaces_stale_faces(tmp_path: Path, monkeypatch) -> None:
+    store, people, faces = MediaStore(), PersonStore(), FaceStore()
+    media_root = tmp_path / "media"
+    (media_root / "p").mkdir(parents=True)
+    (media_root / "p" / "i1.jpg").write_bytes(b"x")
+    store.add(_make_item("i1"))
+    faces.add(FaceEntry(item_id="i1", person_id="old", bbox=(9, 9, 9, 9)))
+
+    monkeypatch.setattr(
+        worker_mod,
+        "detect_faces",
+        lambda path, model_root: [
+            FaceRecord(bbox=(1, 1, 2, 2), embedding=_unit([1, 0]), det_score=0.9)
+        ],
+    )
+
+    asyncio.run(
+        worker_mod._process_one(
+            store, people, faces, "i1", media_root, tmp_path / "models"
+        )
+    )
+    assert len(faces) == 1
+    assert faces.all()[0].bbox == (1, 1, 2, 2)
+
+
+def test_sync_person_ids_projects_faces_onto_items() -> None:
+    store, faces = MediaStore(), FaceStore()
+    store.add(_make_item("i1"))
+    faces.add(FaceEntry(item_id="i1", person_id="pX", bbox=(0, 0, 1, 1)))
+    faces.add(FaceEntry(item_id="i1", person_id="pY", bbox=(0, 0, 1, 1)))
+    worker_mod.sync_person_ids(store, faces)
+    assert store.get("i1").person_ids == ["pX", "pY"]
+
+
+def test_pending_face_ids_respects_version() -> None:
+    store = MediaStore()
+    store.add(_make_item("new"))
+    store.add(_make_item("old", faces_processed=True, faces_version=1))
+    store.add(_make_item("cur", faces_processed=True, faces_version=2))
+    assert set(store.pending_face_ids(2, 10)) == {"new", "old"}
+
+
+# ---------------------------------------------------------------------------
+# MediaStore search / stats by person
+# ---------------------------------------------------------------------------
+
+
+def test_matches_query_and_stats_by_person() -> None:
+    people, faces = PersonStore(), FaceStore()
+    pid = _assign(people, faces, _unit([1, 0, 0]), "i1")
     people.rename(pid, "Grandma")
 
     store = MediaStore()
-    store.add(
-        _make_item(
-            filename="a.jpg",
-            server_path="p/a.jpg",
-            meta=MediaMetadata(sha256="h1"),
-            person_ids=[pid],
-            faces_processed=True,
-        )
-    )
-    store.add(
-        _make_item(
-            filename="b.jpg", server_path="p/b.jpg", meta=MediaMetadata(sha256="h2")
-        )
-    )
+    store.add(_make_item("a", person_ids=[pid], faces_processed=True))
+    store.add(_make_item("b"))
 
     page = store.list(q="grandma", people=people)
-    assert page.total == 1
-    assert page.items[0].filename == "a.jpg"
-
-    # Without a people store, name matches are simply not attempted.
-    page_no_people = store.list(q="grandma")
-    assert page_no_people.total == 0
-
-
-def test_stats_by_person() -> None:
-    people = PersonStore()
-    pid = people.assign_face(_unit([1, 0, 0, 0]), "item-1")
-    people.rename(pid, "Grandma")
-    unnamed_pid = people.assign_face(_unit([0, 1, 0, 0]), "item-2")
-    assert people.get(unnamed_pid).name is None
-
-    store = MediaStore()
-    store.add(
-        _make_item(
-            filename="a.jpg",
-            server_path="p/a.jpg",
-            meta=MediaMetadata(sha256="h1"),
-            person_ids=[pid],
-            faces_processed=True,
-        )
-    )
-    store.add(
-        _make_item(
-            filename="b.jpg",
-            server_path="p/b.jpg",
-            meta=MediaMetadata(sha256="h2"),
-            person_ids=[unnamed_pid],
-            faces_processed=True,
-        )
-    )
+    assert page.total == 1 and page.items[0].id == "a"
+    assert store.list(q="grandma").total == 0
 
     stats = store.stats(people=people)
     assert stats["by_person"] == {"Grandma": 1}
-
-    # Without a people store, by_person is simply omitted.
-    stats_no_people = store.stats()
-    assert "by_person" not in stats_no_people
+    assert "by_person" not in store.stats()
 
 
 def test_counts_by_person() -> None:
     store = MediaStore()
-    store.add(
-        _make_item(
-            filename="a.jpg",
-            server_path="p/a.jpg",
-            meta=MediaMetadata(sha256="h1"),
-            person_ids=["p1", "p2"],
-        )
-    )
-    store.add(
-        _make_item(
-            filename="b.jpg",
-            server_path="p/b.jpg",
-            meta=MediaMetadata(sha256="h2"),
-            person_ids=["p1"],
-        )
-    )
+    store.add(_make_item("a", person_ids=["p1", "p2"]))
+    store.add(_make_item("b", person_ids=["p1"]))
     assert store.counts_by_person() == {"p1": 2, "p2": 1}
 
 
-def test_pending_face_ids_excludes_processed_and_trashed() -> None:
-    from datetime import datetime, timezone
-
-    store = MediaStore()
-    store.add(
-        _make_item(
-            filename="a.jpg", server_path="p/a.jpg", meta=MediaMetadata(sha256="h1")
-        )
-    )
-    store.add(
-        _make_item(
-            filename="b.jpg",
-            server_path="p/b.jpg",
-            meta=MediaMetadata(sha256="h2"),
-            faces_processed=True,
-        )
-    )
-    store.add(
-        _make_item(
-            filename="c.jpg",
-            server_path="p/c.jpg",
-            meta=MediaMetadata(sha256="h3"),
-            trashed_at=datetime.now(timezone.utc),
-        )
-    )
-    pending = store.pending_face_ids(10)
-    assert len(pending) == 1
-
-
 # ---------------------------------------------------------------------------
-# HTTP endpoints: /people, /people/{id}/name, /people/suggest
+# HTTP endpoints (pre-seeded people/faces stores)
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
+def _seeded_client(tmp_path: Path):
+    """A TestClient over an app pre-seeded with two people and their faces."""
     cfg = ServerConfig(fs_root=tmp_path)
     for d in ("media", "uploads", "cloud", ".trash", "logs"):
         (tmp_path / d).mkdir()
-    return TestClient(build_app(cfg))
+    store, people, faces = MediaStore(), PersonStore(), FaceStore()
+    p_grandma = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    _assign(people, faces, _unit([0.98, 0.02, 0]), "i2")
+    _assign(people, faces, _unit([0.99, 0.01, 0]), "i3")
+    people.rename(p_grandma, "Grandma")
+    p_small = _assign(people, faces, _unit([0, 1, 0]), "i4")
+    store.add(_make_item("i1", person_ids=[p_grandma]))
+    store.add(_make_item("i2", person_ids=[p_grandma]))
+    store.add(_make_item("i3", person_ids=[p_grandma]))
+    store.add(_make_item("i4", person_ids=[p_small]))
+    client = TestClient(build_app(cfg, store, people, faces))
+    return client, p_grandma, p_small
 
 
-def test_people_endpoints_empty(client: TestClient) -> None:
-    r = client.get("/people")
+def test_endpoint_people_min_count(tmp_path: Path) -> None:
+    client, p_grandma, p_small = _seeded_client(tmp_path)
+    ids = {p["id"] for p in client.get("/people").json()}
+    assert p_grandma in ids
+    assert p_small not in ids
+    ids_all = {p["id"] for p in client.get("/people?min_count=1").json()}
+    assert p_small in ids_all
+
+
+def test_endpoint_person_photos(tmp_path: Path) -> None:
+    client, p_grandma, _ = _seeded_client(tmp_path)
+    photos = client.get(f"/people/{p_grandma}/photos").json()
+    assert len(photos) == 3
+    row = photos[0]
+    assert set(row) == {"item_id", "face_id", "bbox", "img_w", "img_h"}
+    assert row["img_w"] == 100 and row["img_h"] == 100
+    assert client.get("/people/nope/photos").status_code == 404
+
+
+def test_endpoint_reassign_face_detach(tmp_path: Path) -> None:
+    client, p_grandma, _ = _seeded_client(tmp_path)
+    photos = client.get(f"/people/{p_grandma}/photos").json()
+    face_id = photos[0]["face_id"]
+    r = client.post(f"/faces/{face_id}/reassign", json={"person_id": None})
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["person_id"] != p_grandma
+    assert len(client.get(f"/people/{p_grandma}/photos").json()) == 2
+    assert client.post("/faces/nope/reassign", json={}).status_code == 404
 
-    r = client.get("/people/suggest?q=al")
+
+def test_endpoint_reassign_face_to_existing(tmp_path: Path) -> None:
+    client, p_grandma, p_small = _seeded_client(tmp_path)
+    photos = client.get(f"/people/{p_small}/photos").json()
+    face_id = photos[0]["face_id"]
+    r = client.post(f"/faces/{face_id}/reassign", json={"person_id": p_grandma})
     assert r.status_code == 200
-    assert r.json() == []
+    assert len(client.get(f"/people/{p_grandma}/photos").json()) == 4
 
 
-def test_people_name_not_found(client: TestClient) -> None:
-    r = client.post("/people/nope/name", json={"name": "Someone"})
-    assert r.status_code == 404
+def test_endpoint_merge_people(tmp_path: Path) -> None:
+    client, p_grandma, p_small = _seeded_client(tmp_path)
+    r = client.post(f"/people/{p_grandma}/merge", json={"from_id": p_small})
+    assert r.status_code == 200
+    assert len(client.get(f"/people/{p_grandma}/photos").json()) == 4
+    assert client.get(f"/people/{p_small}/photos").status_code == 404
 
 
-def test_people_name_requires_nonempty(client: TestClient, tmp_path: Path) -> None:
-    # Seed a person directly via the store the app was built with is not
-    # accessible from here, so exercise the empty-name validation path only.
-    r = client.post("/people/whatever/name", json={"name": "   "})
-    assert r.status_code == 400
+def test_endpoint_recluster(tmp_path: Path) -> None:
+    client, _, _ = _seeded_client(tmp_path)
+    r = client.post("/people/recluster")
+    assert r.status_code == 200
+    assert r.json()["status"] == "reclustered"
+
+
+def test_endpoint_people_name_validation(tmp_path: Path) -> None:
+    client, p_grandma, _ = _seeded_client(tmp_path)
+    assert client.post("/people/nope/name", json={"name": "X"}).status_code == 404
+    assert (
+        client.post(f"/people/{p_grandma}/name", json={"name": "  "}).status_code == 400
+    )
+    ok = client.post(f"/people/{p_grandma}/name", json={"name": "Nana"})
+    assert ok.status_code == 200 and ok.json()["name"] == "Nana"

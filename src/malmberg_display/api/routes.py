@@ -384,15 +384,9 @@ def build_app(
         return await _proxy_json("GET", "/places", params=dict(request.query_params))
 
     @app.get("/people")
-    async def proxy_people() -> object:
+    async def proxy_people(request: Request) -> object:
         """Proxy: detected people (id, name, count, sample thumbnail)."""
-        return await _proxy_json("GET", "/people")
-
-    @app.post("/people/{person_id}/name")
-    async def proxy_name_person(person_id: str, request: Request) -> object:
-        """Proxy: assign or change a detected person's display name."""
-        body = await request.json()
-        return await _proxy_json("POST", f"/people/{person_id}/name", json=body)
+        return await _proxy_json("GET", "/people", params=dict(request.query_params))
 
     @app.get("/people/suggest")
     async def proxy_suggest_people(request: Request) -> object:
@@ -400,6 +394,34 @@ def build_app(
         return await _proxy_json(
             "GET", "/people/suggest", params=dict(request.query_params)
         )
+
+    @app.get("/people/{person_id}/photos")
+    async def proxy_person_photos(person_id: str) -> object:
+        """Proxy: a person's faces (item_id, bbox, img dims) for the review UI."""
+        return await _proxy_json("GET", f"/people/{person_id}/photos")
+
+    @app.post("/people/{person_id}/name")
+    async def proxy_name_person(person_id: str, request: Request) -> object:
+        """Proxy: assign or change a detected person's display name."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/people/{person_id}/name", json=body)
+
+    @app.post("/people/{person_id}/merge")
+    async def proxy_merge_people(person_id: str, request: Request) -> object:
+        """Proxy: merge another person into *person_id*."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/people/{person_id}/merge", json=body)
+
+    @app.post("/people/recluster")
+    async def proxy_recluster_people() -> object:
+        """Proxy: rebuild all person groups from the per-face index."""
+        return await _proxy_json("POST", "/people/recluster")
+
+    @app.post("/faces/{face_id}/reassign")
+    async def proxy_reassign_face(face_id: str, request: Request) -> object:
+        """Proxy: reassign or detach a single face's person."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/faces/{face_id}/reassign", json=body)
 
     @app.delete("/media/{item_id}")
     async def proxy_delete_media(
