@@ -54,6 +54,9 @@ class DisplayContext(BaseModel):
     """Render the current-time clock overlay."""
     show_caption: bool = True
     """Render the per-image date/location/camera caption overlay."""
+    mute_video: bool = True
+    """Mute video audio by default; the API unmutes only when the user manually
+    shows a single item (so the ambient slideshow never plays sound)."""
 
 
 class Displayable(ABC):

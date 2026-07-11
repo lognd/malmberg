@@ -39,6 +39,9 @@ class VideoDisplay(Displayable):
             )
 
         try:
+            # Default to muted; the API unmutes only for a manual single-item
+            # show, so the ambient slideshow never plays sound on its own.
+            player.mute = getattr(ctx, "mute_video", True)
             player.play(str(self._path))
             # wait_for_playback blocks until the clip ends; run it off the loop
             # rather than observing core-idle, which fires immediately while idle.

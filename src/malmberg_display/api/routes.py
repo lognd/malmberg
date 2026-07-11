@@ -16,6 +16,7 @@ from malmberg_core import __version__
 from malmberg_core.logging import get_logger
 from malmberg_core.models import Tag
 from malmberg_core.networking import get_mac_address
+from malmberg_display.display.proto import DisplayContext
 from malmberg_display.display.toast import Toast
 from malmberg_display.slideshow.slideshow import ProducerType, Slideshow
 from malmberg_server.api.web import render_dashboard_html
@@ -72,6 +73,7 @@ def build_app(
     make_producer: Optional[Callable[..., Optional[ProducerType]]] = None,
     server_url: Optional[str] = None,
     http_client: Optional[httpx.AsyncClient] = None,
+    display_ctx: Optional[DisplayContext] = None,
 ) -> FastAPI:
     """Build and return the FastAPI application wired to *slideshow*.
 
@@ -101,6 +103,10 @@ def build_app(
         slideshow.resume()
         slideshow.skip()
         state["mode"] = mode
+        # Video audio plays only when the user manually picks a single item to
+        # show; the automatic slideshow (all / playlist) stays muted.
+        if display_ctx is not None:
+            display_ctx.mute_video = mode != "single"
         _notify(message)
 
     @app.get("/")

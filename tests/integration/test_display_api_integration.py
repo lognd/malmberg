@@ -181,3 +181,16 @@ async def test_show_requires_server_mode() -> None:
     async with asgi_client(app) as c:
         r = await c.post("/slideshow/show/abc")
     assert r.status_code == 409
+
+
+async def test_video_muted_except_manual_single() -> None:
+    ctx = DisplayContext()
+    assert ctx.mute_video is True  # ambient slideshow is muted by default
+    app = build_app(_make_slideshow(), make_producer=_fake_producer, display_ctx=ctx)
+    async with asgi_client(app) as c:
+        await c.post("/slideshow/show/abc123")
+        assert ctx.mute_video is False  # manual single show plays sound
+        await c.post("/slideshow/playlist", json={"item_ids": ["a", "b"]})
+        assert ctx.mute_video is True  # playlist is muted again
+        await c.post("/slideshow/all")
+        assert ctx.mute_video is True  # whole library is muted

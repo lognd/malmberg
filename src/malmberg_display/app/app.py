@@ -124,6 +124,7 @@ class DisplayApp:
                     make_producer=make_server_producer,
                     server_url=self._cfg.server_url,
                     http_client=client,
+                    display_ctx=display_ctx,
                 ),
                 host=self._cfg.host,
                 port=self._cfg.port,
