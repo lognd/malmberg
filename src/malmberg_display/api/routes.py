@@ -133,12 +133,15 @@ def build_app(
 
     @app.post("/slideshow/prev")
     async def prev_item() -> dict[str, str]:
-        hist = slideshow.history
-        if len(hist) < 2:
-            _notify("No previous photo")
-            raise HTTPException(status_code=404, detail="No previous item in history")
+        if not slideshow.show_previous():
+            if toast is not None:
+                toast.show("No earlier photos -- start of history", duration_s=4.0)
+            raise HTTPException(
+                status_code=409, detail="Already at the earliest photo in history"
+            )
+        slideshow.resume()
         _notify("Previous")
-        return {"status": "ok", "prev": repr(hist[1])}
+        return {"status": "ok"}
 
     @app.post("/slideshow/pause")
     async def toggle_pause() -> dict[str, str]:

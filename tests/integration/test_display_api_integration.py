@@ -92,7 +92,7 @@ async def test_next_ok() -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /slideshow/prev -- 404 when no history
+# POST /slideshow/prev -- 409 when at the start of history
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +100,7 @@ async def test_prev_no_history() -> None:
     app = build_app(_make_slideshow())
     async with asgi_client(app) as c:
         r = await c.post("/slideshow/prev")
-    assert r.status_code == 404
+    assert r.status_code == 409
 
 
 # ---------------------------------------------------------------------------

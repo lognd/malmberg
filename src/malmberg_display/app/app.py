@@ -207,6 +207,11 @@ class DisplayApp:
         while True:
             active = toast.active
             base = display_ctx.base_frame
+            # Never draw while the picture renderer owns the screen (fast-forward
+            # would otherwise tear); wait for the current frame to settle.
+            if display_ctx.rendering:
+                await asyncio.sleep(0.05)
+                continue
             if active and base is not None:
                 screen.blit(base, (0, 0))
                 renderer.render_toast(

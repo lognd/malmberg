@@ -178,3 +178,15 @@ async def test_display_drops_stale_generation() -> None:
         pass
 
     assert not stale.displayed  # dropped because its generation is behind
+
+
+@pytest.mark.asyncio
+async def test_show_previous_steps_back_through_history() -> None:
+    show = _make_slideshow(["a"])
+    show._history = [_Stub("1"), _Stub("2"), _Stub("3")]
+    show._cursor = 2  # currently showing the newest
+    assert show.show_previous() is True
+    assert show._override is show._history[1] and show._cursor == 1
+    assert show.show_previous() is True
+    assert show._override is show._history[0] and show._cursor == 0
+    assert show.show_previous() is False  # at the start of history

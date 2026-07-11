@@ -138,19 +138,23 @@ class PictureDisplay(Displayable):
         w, h = ctx.width, ctx.height
         frame = _compose_frame(self._surface, self._bg, w, h)
 
-        if ctx.fade_duration_s > 0:
-            await self._crossfade(ctx, frame)
-        else:
-            ctx.screen.blit(frame, (0, 0))
+        ctx.rendering = True  # keep the toast task off the screen while drawing
+        try:
+            if ctx.fade_duration_s > 0:
+                await self._crossfade(ctx, frame)
+            else:
+                ctx.screen.blit(frame, (0, 0))
 
-        if ctx.overlay_renderer is not None:
-            caption = self._caption if ctx.show_caption else None
-            ctx.overlay_renderer.render(ctx.screen, w, h, caption)
+            if ctx.overlay_renderer is not None:
+                caption = self._caption if ctx.show_caption else None
+                ctx.overlay_renderer.render(ctx.screen, w, h, caption)
 
-        pygame.display.flip()
-        # Snapshot the finished frame so the toast task can repaint over it and
-        # cleanly restore it when the toast expires.
-        ctx.base_frame = ctx.screen.copy()
+            pygame.display.flip()
+            # Snapshot the finished frame so the toast task can repaint over it
+            # and cleanly restore it when the toast expires.
+            ctx.base_frame = ctx.screen.copy()
+        finally:
+            ctx.rendering = False
 
         dwell = (
             self._dwell_override_s

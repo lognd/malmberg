@@ -37,6 +37,9 @@ class DisplayContext(BaseModel):
     skip_event: Optional[Any] = None
     """asyncio.Event set to cut the current item's dwell short (Next / producer
     switch); the renderer waits on it instead of a plain sleep."""
+    rendering: bool = False
+    """True while the picture renderer is actively drawing/cross-fading; the
+    toast task must not touch the screen during this window (avoids tearing)."""
     mpv_player: Optional[Any] = None
     """mpv.MPV instance or None if not yet initialized."""
     overlay_renderer: Optional[Any] = None

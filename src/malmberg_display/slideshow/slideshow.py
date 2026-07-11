@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from typing import AsyncIterator, Iterator, Optional, Union, cast
 
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
@@ -44,9 +43,15 @@ class Slideshow:
             maxsize=max_preload
         )
         self._generation = 0
-        self._history: deque[Displayable] = deque(maxlen=history_len)
+        self._history: list[Displayable] = []
+        self._history_len = history_len
+        # Cursor into _history for Previous/back-navigation; -1 before anything
+        # is shown, otherwise the index of the item currently displayed.
+        self._cursor = -1
         self._paused = False
         self._current: Optional[Displayable] = None
+        # One-shot item to display next, bypassing the queue (for Previous).
+        self._override: Optional[Displayable] = None
         # Set to cut the current item's dwell short (Next / producer switch).
         self._skip: asyncio.Event = asyncio.Event()
         display_ctx.skip_event = self._skip
@@ -59,6 +64,15 @@ class Slideshow:
     def skip(self) -> None:
         """Cut the current item's dwell short so the next item shows at once."""
         self._skip.set()
+
+    def show_previous(self) -> bool:
+        """Step back one item in history and display it. False if at the start."""
+        if self._cursor <= 0:
+            return False
+        self._cursor -= 1
+        self._override = self._history[self._cursor]
+        self._skip.set()
+        return True
 
     def flush(self) -> None:
         """Discard pre-loaded items so a producer swap takes effect immediately."""
@@ -117,10 +131,19 @@ class Slideshow:
             if self._paused:
                 await asyncio.sleep(0.1)
                 continue
-            gen, item = await self._queue.get()
-            if gen != self._generation:
-                continue  # item came from a producer that has since been replaced
-            self._current = item
-            self._history.append(item)
+            if self._override is not None:
+                # Back-navigation: show the item without re-recording history.
+                item = self._override
+                self._override = None
+                self._current = item
+            else:
+                gen, item = await self._queue.get()
+                if gen != self._generation:
+                    continue  # item is from a producer that has been replaced
+                self._current = item
+                self._history.append(item)
+                if len(self._history) > self._history_len:
+                    self._history.pop(0)
+                self._cursor = len(self._history) - 1
             self._skip.clear()  # fresh skip window for this item's dwell
             await item.display(self._display_ctx)
