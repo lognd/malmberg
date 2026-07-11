@@ -28,5 +28,5 @@
 ## Infra -- live
 - [x] Auto-update health-check + rollback (both machines); Wi-Fi watchdog; quiet logs
 
-## Only remaining item (needs YOU -- router setting)
-- [ ] DHCP reservation for the Pi (192.168.68.55) so MALMBERG_DISPLAY_URL stays valid
+## Network -- DONE
+- [x] Pi given a static IP (192.168.69.70); server + ssh alias updated
