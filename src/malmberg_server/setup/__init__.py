@@ -8,6 +8,16 @@ Every step is idempotent: it is safe to re-run after a partial install or
 after an upgrade.  Steps that cannot be completed non-fatally (e.g. ZFS
 unavailable) emit a warning and continue.
 
+Beyond the base install it also hardens a mirrored-ZFS deployment and wires up
+unattended updates:
+
+* grants the service user snapshot rights on the data dataset,
+* caps the ZFS ARC to roughly half of RAM,
+* enables monthly scrubs on every imported pool,
+* mirrors the EFI System Partition to every other disk backing the root pool
+  (so any single disk in the mirror can boot the machine alone), and
+* installs a systemd timer that pulls the latest code from GitHub and redeploys.
+
 Exit codes:
   0  All required steps completed (warnings may have been emitted).
   1  A required step failed (details printed to stderr).
@@ -21,6 +31,7 @@ import grp
 import os
 import pwd
 import random
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -64,13 +75,13 @@ def validate_environment() -> list[str]:
         problems.append(f"Python {req}+ required; found {v}.")
 
     for cmd in _REQUIRED_CMDS:
-        if subprocess.run(["which", cmd], capture_output=True).returncode != 0:
+        if not _has_cmd(cmd):
             problems.append(
                 f"Required command '{cmd}' not found. "
                 "Install it with: sudo apt install systemd passwd"
             )
 
-    if subprocess.run(["which", "zfs"], capture_output=True).returncode != 0:
+    if not _has_cmd("zfs"):
         _log.warning(_ZFS_INSTALL_HINT)
 
     return problems
@@ -87,7 +98,26 @@ _HARDWARE_TOML = _CONFIG_DIR / "hardware.toml"
 _PIN_FILE = _CONFIG_DIR / "pairing-pin.txt"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/malmberg-server.service")
 
+# Single home for the ZFS names so pool/dataset are never duplicated inline.
+_ZFS_POOL = "tank"
+_ZFS_DATASET = f"{_ZFS_POOL}/malmberg"
+_ZFS_USER_PERMS = "snapshot,destroy,mount,hold"
+_ARC_CONF = Path("/etc/modprobe.d/zfs.conf")
+
 _FS_SUBDIRS = ("media", "uploads", "cloud", ".trash", "logs")
+
+# Unattended GitHub updates.
+_DEFAULT_REPO_DIR = Path("/opt/malmberg")
+_DEFAULT_BRANCH = "main"
+_DEFAULT_UPDATE_MINUTES = 10
+_UPDATE_SCRIPT = Path("/usr/local/sbin/malmberg-update.sh")
+_UPDATE_SERVICE = Path("/etc/systemd/system/malmberg-update.service")
+_UPDATE_TIMER = Path("/etc/systemd/system/malmberg-update.timer")
+
+# EFI mirror (keep every disk in the pool independently bootable).
+_ESP_SYNC_SCRIPT = Path("/usr/local/sbin/malmberg-sync-esp.sh")
+_ESP_SYNC_SERVICE = Path("/etc/systemd/system/malmberg-sync-esp.service")
+_ESP_SYNC_TIMER = Path("/etc/systemd/system/malmberg-sync-esp.timer")
 
 _UNIT_TEMPLATE = """\
 [Unit]
@@ -110,6 +140,102 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 """
 
+_UPDATE_SCRIPT_TEMPLATE = """\
+#!/bin/bash
+# Managed by `malmberg_server setup` -- edits are overwritten on the next run.
+# Pulls the latest code from GitHub and redeploys when origin/{branch} advances.
+set -euo pipefail
+export HOME=/root
+REPO="{repo_dir}"
+BRANCH="{branch}"
+cd "$REPO"
+git fetch --quiet origin "$BRANCH"
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse "origin/$BRANCH")
+if [ "$LOCAL" = "$REMOTE" ]; then
+    exit 0
+fi
+logger -t malmberg-update "new revision $REMOTE (was $LOCAL); updating"
+git reset --hard "origin/$BRANCH"
+UVLOG=/tmp/malmberg-update-uv.log
+{uv} sync --frozen --project "$REPO" >"$UVLOG" 2>&1 || \
+    logger -t malmberg-update "warning: uv sync failed (see $UVLOG)"
+chown -R {user}:{user} "$REPO"
+systemctl restart malmberg-server
+logger -t malmberg-update "updated to $REMOTE; malmberg-server restarted"
+"""
+
+_UPDATE_SERVICE_TEMPLATE = """\
+[Unit]
+Description=Pull latest Malmberg from GitHub and redeploy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={script}
+"""
+
+_UPDATE_TIMER_TEMPLATE = """\
+[Unit]
+Description=Check GitHub for Malmberg updates every {minutes} minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec={minutes}min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+
+# GUID that marks an EFI System Partition (constant across all GPT disks).
+_ESP_TYPE_GUID = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+_ESP_SYNC_SCRIPT_BODY = """\
+#!/bin/bash
+# Managed by `malmberg_server setup` -- edits are overwritten on the next run.
+# Mirrors the mounted EFI System Partition onto the ESP of every OTHER disk
+# backing the ZFS pools, so any single disk can boot the machine alone.
+set -euo pipefail
+SRC_MNT=/boot/efi
+SRC_DEV=$(findmnt -no SOURCE "$SRC_MNT")
+SRC_DISK=/dev/$(lsblk -no PKNAME "$SRC_DEV")
+mapfile -t POOL_DISKS < <(zpool status -PL | grep -oE '/dev/[a-z]+' | sort -u)
+for disk in "${{POOL_DISKS[@]}}"; do
+    [ "$disk" = "$SRC_DISK" ] && continue
+    part=$(lsblk -rno NAME,PARTTYPE "$disk" \
+        | awk 'tolower($2)=="{esp_guid}"{{print "/dev/"$1; exit}}')
+    [ -z "$part" ] && continue
+    m=$(mktemp -d)
+    mount "$part" "$m"
+    rsync -a --delete "$SRC_MNT"/ "$m"/
+    umount "$m"; rmdir "$m"
+    logger -t malmberg-sync-esp "mirrored ESP $SRC_DEV -> $part"
+done
+"""
+
+_ESP_SYNC_SERVICE_BODY = """\
+[Unit]
+Description=Mirror the EFI System Partition to every other pool disk
+
+[Service]
+Type=oneshot
+ExecStart={script}
+"""
+
+_ESP_SYNC_TIMER_BODY = """\
+[Unit]
+Description=Daily EFI mirror to secondary pool disks
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -120,6 +246,7 @@ def run(args: argparse.Namespace) -> None:
     """Run all provisioning steps.  Prints a summary on completion."""
     dry = getattr(args, "dry_run", False)
     no_enable = getattr(args, "no_enable", False)
+    no_hardening = getattr(args, "no_hardening", False)
     fs_root = Path(getattr(args, "fs_root", None) or "/fs")
 
     _require_root()
@@ -151,6 +278,9 @@ def run(args: argparse.Namespace) -> None:
     zfs_msg = _step_zfs(fs_root, dry, warnings)
     steps.append(("ZFS", zfs_msg))
 
+    # 4b. ZFS delegated permissions (always, even when the dataset pre-existed)
+    steps.append(("ZFS permissions", _step_zfs_permissions(dry, warnings)))
+
     # 5. Config directory ownership
     _step_config_ownership(dry)
     steps.append(("Config dir", str(_CONFIG_DIR)))
@@ -174,7 +304,18 @@ def run(args: argparse.Namespace) -> None:
     _step_cron(fs_root, dry, warnings)
     steps.append(("Cron jobs", "trash purge + ZFS backup installed"))
 
-    # 10. Pairing PIN
+    # 10. Mirror hardening (ARC cap, scrubs, EFI mirror)
+    if no_hardening:
+        steps.append(("Mirror hardening", "skipped (--no-hardening)"))
+    else:
+        steps.append(("ARC limit", _step_arc_limit(dry, warnings)))
+        steps.append(("ZFS scrubs", _step_scrubs(dry, warnings)))
+        steps.append(("EFI mirror", _step_esp_mirror(dry, warnings)))
+
+    # 11. Unattended GitHub updates
+    steps.append(("Auto-update", _step_auto_update(args, dry, warnings)))
+
+    # 12. Pairing PIN
     pin = _step_pin(dry)
     steps.append(("Pairing PIN", pin))
 
@@ -194,7 +335,7 @@ def _step_hardware(dry: bool, warnings: list[str]) -> HardwareProfile:
         profile = HardwareProfile.fallback()
         warnings.append(
             "Hardware auto-detection failed; using generic-x86 fallback profile. "
-            f"Edit {_HARDWARE_TOML} manually if needed."
+            f"Edit {_HARDWARE_TOML} manually if needed. (Expected on non-Pi hardware.)"
         )
     if not dry:
         write_hardware_toml(profile, _HARDWARE_TOML)
@@ -245,46 +386,52 @@ def _step_dirs(fs_root: Path, dry: bool) -> None:
 
 
 def _step_zfs(fs_root: Path, dry: bool, warnings: list[str]) -> str:
-    """Create ZFS dataset if ZFS is available; otherwise warn."""
-    if subprocess.run(["which", "zfs"], capture_output=True).returncode != 0:
+    """Create the ZFS dataset if ZFS is available; otherwise warn."""
+    if not _has_cmd("zfs"):
         warnings.append(
             "ZFS not found.  Install with `sudo apt install zfsutils-linux` "
             "for snapshot-based backups.  Plain directory in use."
         )
         return "ZFS unavailable -- using plain directory"
 
-    dataset = "tank/malmberg"
-    check = subprocess.run(
-        ["zfs", "list", "-H", "-o", "name", dataset],
-        capture_output=True,
-        text=True,
-    )
-    if check.returncode == 0:
-        _log.info("ZFS dataset '%s' already exists.", dataset)
-        return f"{dataset} (already exists)"
+    if _zfs_dataset_exists(_ZFS_DATASET):
+        _log.info("ZFS dataset '%s' already exists.", _ZFS_DATASET)
+        return f"{_ZFS_DATASET} (already exists)"
 
-    _log.info("Creating ZFS dataset '%s'.", dataset)
+    _log.info("Creating ZFS dataset '%s'.", _ZFS_DATASET)
     if not dry:
         result = subprocess.run(
-            ["zfs", "create", dataset],
+            ["zfs", "create", _ZFS_DATASET],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
             warnings.append(
-                f"Could not create ZFS dataset '{dataset}': {result.stderr.strip()}. "
-                "Create it manually: sudo zfs create tank/malmberg"
+                f"Could not create ZFS dataset '{_ZFS_DATASET}': "
+                f"{result.stderr.strip()}. Create the pool first, e.g. "
+                f"`sudo zpool create {_ZFS_POOL} mirror <diskA> <diskB>`, "
+                f"then re-run setup."
             )
-            return f"{dataset} -- creation failed (see warnings)"
+            return f"{_ZFS_DATASET} -- creation failed (see warnings)"
 
-    # Grant malmberg user snapshot permissions.
+    return f"{_ZFS_DATASET} created"
+
+
+def _step_zfs_permissions(dry: bool, warnings: list[str]) -> str:
+    """Grant the service user snapshot rights on the data dataset (idempotent)."""
+    if not _has_cmd("zfs"):
+        return "skipped (ZFS unavailable)"
+    if not _zfs_dataset_exists(_ZFS_DATASET):
+        return f"skipped ({_ZFS_DATASET} absent)"
+    _log.info(
+        "Granting '%s' [%s] on %s.", _SYSTEM_USER, _ZFS_USER_PERMS, _ZFS_DATASET
+    )
     if not dry:
         subprocess.run(
-            ["zfs", "allow", _SYSTEM_USER, "snapshot,destroy", dataset],
+            ["zfs", "allow", _SYSTEM_USER, _ZFS_USER_PERMS, _ZFS_DATASET],
             check=False,
         )
-
-    return f"{dataset} created"
+    return f"{_SYSTEM_USER} may [{_ZFS_USER_PERMS}] {_ZFS_DATASET}"
 
 
 def _step_config_ownership(dry: bool) -> None:
@@ -307,7 +454,7 @@ def _step_tls(dry: bool, warnings: list[str]) -> None:
         _log.info("TLS certificate already present at %s.", cert)
         return
 
-    if subprocess.run(["which", "openssl"], capture_output=True).returncode != 0:
+    if not _has_cmd("openssl"):
         warnings.append(
             "openssl not found.  Install with `sudo apt install openssl` and "
             f"regenerate the certificate manually (see provisioning.md). "
@@ -395,11 +542,11 @@ def _step_cron(fs_root: Path, dry: bool, warnings: list[str]) -> None:
             # Run at 02:00 daily; trigger a ZFS snapshot via the server API.
             f"0 2 * * * {sys.executable} -c "
             f'"from malmberg_server.backup.zfs import snapshot; '
-            f"snapshot('tank/malmberg')\"",
+            f"snapshot('{_ZFS_DATASET}')\"",
         ),
     ]
 
-    if subprocess.run(["which", "crontab"], capture_output=True).returncode != 0:
+    if not _has_cmd("crontab"):
         warnings.append(
             "crontab not found; cron jobs not installed. "
             "Install with: sudo apt install cron"
@@ -442,6 +589,150 @@ def _step_cron(fs_root: Path, dry: bool, warnings: list[str]) -> None:
         )
 
 
+def _step_arc_limit(dry: bool, warnings: list[str]) -> str:
+    """Cap the ZFS ARC at roughly half of RAM so services stay responsive."""
+    if not _has_cmd("zfs"):
+        return "skipped (ZFS unavailable)"
+    total = _mem_total_bytes()
+    if total is None:
+        return "skipped (RAM unknown)"
+    arc_max = max(1 * 1024**3, total // 2)
+    content = (
+        "# Managed by malmberg_server setup: cap ARC at ~half of RAM.\n"
+        f"options zfs zfs_arc_max={arc_max}\n"
+    )
+    if not dry:
+        if not _ARC_CONF.is_file() or _ARC_CONF.read_text() != content:
+            _ARC_CONF.write_text(content)
+            subprocess.run(
+                ["update-initramfs", "-u"], check=False, capture_output=True
+            )
+        # Apply immediately when the module is already loaded.
+        live = Path("/sys/module/zfs/parameters/zfs_arc_max")
+        try:
+            live.write_text(str(arc_max))
+        except OSError:
+            pass
+    return f"{arc_max / 1024**3:.1f} GiB max"
+
+
+def _step_scrubs(dry: bool, warnings: list[str]) -> str:
+    """Enable a monthly scrub timer for every imported pool."""
+    if not _has_cmd("zpool"):
+        return "skipped (ZFS unavailable)"
+    pools = _imported_pools()
+    if not pools:
+        return "skipped (no pools imported)"
+    if not dry:
+        for pool in pools:
+            subprocess.run(
+                ["systemctl", "enable", "--now", f"zfs-scrub-monthly@{pool}.timer"],
+                check=False,
+                capture_output=True,
+            )
+    return "monthly: " + ", ".join(pools)
+
+
+def _step_esp_mirror(dry: bool, warnings: list[str]) -> str:
+    """Mirror the ESP to every other pool disk so any disk can boot alone.
+
+    Only meaningful on a mirrored pool; skips cleanly on single-disk setups.
+    """
+    if not _has_cmd("zpool"):
+        return "skipped (ZFS unavailable)"
+    status = subprocess.run(
+        ["zpool", "status"], capture_output=True, text=True
+    ).stdout
+    if "mirror" not in status:
+        return "skipped (no mirror vdev)"
+    if not _is_mount("/boot/efi"):
+        warnings.append(
+            "EFI mirror: /boot/efi is not mounted; cannot mirror the bootloader. "
+            "Mount the ESP and re-run setup."
+        )
+        return "skipped (/boot/efi not mounted)"
+
+    script = _ESP_SYNC_SCRIPT_BODY.format(esp_guid=_ESP_TYPE_GUID)
+    _log.info("Installing EFI mirror timer (%s).", _ESP_SYNC_TIMER)
+    if not dry:
+        _write_exec(_ESP_SYNC_SCRIPT, script)
+        _ESP_SYNC_SERVICE.write_text(
+            _ESP_SYNC_SERVICE_BODY.format(script=_ESP_SYNC_SCRIPT)
+        )
+        _ESP_SYNC_TIMER.write_text(_ESP_SYNC_TIMER_BODY)
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        subprocess.run(
+            ["systemctl", "enable", "--now", _ESP_SYNC_TIMER.name],
+            check=False,
+            capture_output=True,
+        )
+        # Do one sync now so the secondary disk is bootable immediately.
+        subprocess.run([str(_ESP_SYNC_SCRIPT)], check=False, capture_output=True)
+    return "daily; synced now"
+
+
+def _step_auto_update(
+    args: argparse.Namespace, dry: bool, warnings: list[str]
+) -> str:
+    """Install a timer that pulls origin/<branch> from GitHub and redeploys."""
+    if getattr(args, "no_auto_update", False):
+        return "disabled (--no-auto-update)"
+
+    repo_dir = Path(
+        getattr(args, "repo_dir", None)
+        or _detect_repo_dir()
+        or _DEFAULT_REPO_DIR
+    )
+    branch = getattr(args, "branch", None) or _DEFAULT_BRANCH
+    minutes = int(getattr(args, "update_interval", None) or _DEFAULT_UPDATE_MINUTES)
+
+    if not (repo_dir / ".git").exists():
+        warnings.append(
+            f"Auto-update: '{repo_dir}' is not a git checkout, so unattended "
+            "updates were not installed. Clone the repo there (or pass "
+            "--repo-dir) and re-run setup."
+        )
+        return "skipped (no git checkout)"
+
+    uv = shutil.which("uv") or "/usr/local/bin/uv"
+    if not Path(uv).exists() and not _has_cmd("uv"):
+        warnings.append(
+            "Auto-update: 'uv' not found on PATH; the updater will pull code but "
+            "cannot sync dependencies. Install uv system-wide (e.g. copy it to "
+            "/usr/local/bin/uv)."
+        )
+
+    _log.info(
+        "Installing auto-update timer: origin/%s every %d min from %s.",
+        branch,
+        minutes,
+        repo_dir,
+    )
+    if not dry:
+        # Root must trust the (possibly non-root-owned) checkout.
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
+            check=False,
+        )
+        _write_exec(
+            _UPDATE_SCRIPT,
+            _UPDATE_SCRIPT_TEMPLATE.format(
+                repo_dir=repo_dir, branch=branch, uv=uv, user=_SYSTEM_USER
+            ),
+        )
+        _UPDATE_SERVICE.write_text(
+            _UPDATE_SERVICE_TEMPLATE.format(script=_UPDATE_SCRIPT)
+        )
+        _UPDATE_TIMER.write_text(_UPDATE_TIMER_TEMPLATE.format(minutes=minutes))
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        subprocess.run(
+            ["systemctl", "enable", "--now", _UPDATE_TIMER.name],
+            check=False,
+            capture_output=True,
+        )
+    return f"every {minutes}m from origin/{branch}"
+
+
 def _step_pin(dry: bool) -> str:
     """Generate (or load existing) pairing PIN."""
     if _PIN_FILE.is_file():
@@ -469,6 +760,65 @@ def _require_root() -> None:
             "sudo uv run python -m malmberg_server setup"
         )
         sys.exit(2)
+
+
+def _has_cmd(cmd: str) -> bool:
+    """Return True if *cmd* is resolvable on PATH."""
+    return subprocess.run(["which", cmd], capture_output=True).returncode == 0
+
+
+def _zfs_dataset_exists(dataset: str) -> bool:
+    """Return True if the named ZFS dataset is present."""
+    return (
+        subprocess.run(
+            ["zfs", "list", "-H", "-o", "name", dataset],
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+
+
+def _imported_pools() -> list[str]:
+    """Return the names of all currently imported ZFS pools."""
+    result = subprocess.run(
+        ["zpool", "list", "-H", "-o", "name"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.split() if line]
+
+
+def _mem_total_bytes() -> int | None:
+    """Return total system RAM in bytes, or None if it cannot be read."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        return None
+    return None
+
+
+def _is_mount(path: str) -> bool:
+    """Return True if *path* is a mount point (robust under chroot/bind)."""
+    return os.path.ismount(path)
+
+
+def _write_exec(path: Path, content: str) -> None:
+    """Write an executable script to *path* (mode 0755)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    path.chmod(0o755)
+
+
+def _detect_repo_dir() -> Path | None:
+    """Return the git checkout that contains this package, if any."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".git").exists():
+            return parent
+    return None
 
 
 def _print_summary(

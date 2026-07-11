@@ -40,6 +40,35 @@ if __name__ == "__main__":
         action="store_true",
         help="Write the systemd unit but do not enable or start the service",
     )
+    setup_p.add_argument(
+        "--no-hardening",
+        action="store_true",
+        help="Skip mirror hardening (ARC cap, monthly scrubs, EFI mirror)",
+    )
+    setup_p.add_argument(
+        "--no-auto-update",
+        action="store_true",
+        help="Do not install the GitHub auto-update timer",
+    )
+    setup_p.add_argument(
+        "--repo-dir",
+        metavar="DIR",
+        help="Git checkout the auto-updater pulls into "
+        "(default: this checkout, else /opt/malmberg)",
+    )
+    setup_p.add_argument(
+        "--branch",
+        metavar="NAME",
+        default="main",
+        help="Git branch the auto-updater tracks (default: main)",
+    )
+    setup_p.add_argument(
+        "--update-interval",
+        metavar="MIN",
+        type=int,
+        default=10,
+        help="Minutes between GitHub update checks (default: 10)",
+    )
 
     # -- run sub-command (and top-level flags) --------------------------------
     run_p = subparsers.add_parser(
