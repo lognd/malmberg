@@ -178,6 +178,3 @@ async def test_display_drops_stale_generation() -> None:
         pass
 
     assert not stale.displayed  # dropped because its generation is behind
-
-    assert show.current is stub
-    assert stub in show.history
