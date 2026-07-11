@@ -11,8 +11,13 @@ On each check, `/usr/local/sbin/malmberg-update.sh`:
 
 1. `git fetch`es `origin/<branch>` in the deploy checkout (`/opt/malmberg`).
 2. If the remote is unchanged, exits immediately.
-3. Otherwise `git reset --hard origin/<branch>`, runs `uv sync --frozen`, re-chowns
-   the tree to `malmberg`, and restarts `malmberg-server`.
+3. Otherwise `git reset --hard origin/<branch>`, runs `uv sync --frozen` (with the
+   role's extras), re-chowns the tree, and restarts the service.
+4. **Health check + auto-rollback:** it then waits up to ~36s for the service to
+   become `active`. If it does not (a bad commit, import error, etc.), the updater
+   reverts to the previous commit, re-syncs, and restarts -- so a broken push can
+   never leave a headless machine crash-looping. The rollback is logged under the
+   `malmberg-update` tag (`journalctl -t malmberg-update`).
 
 ```bash
 systemctl list-timers malmberg-update.timer     # when it next runs

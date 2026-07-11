@@ -117,6 +117,9 @@ class DisplayApp:
                 tg.create_task(server.serve(), name="api")
                 if display_ctx.screen is not None:
                     tg.create_task(self._pump_events(), name="events")
+                    tg.create_task(
+                        self._status_task(slideshow, display_ctx), name="status"
+                    )
                 if discovery_mode:
                     tg.create_task(
                         self._pairing_task(slideshow, cache_dir),
@@ -160,6 +163,30 @@ class DisplayApp:
                     _log.info("Display window received QUIT.")
                     return
             await asyncio.sleep(0.05)
+
+    async def _status_task(self, slideshow: Slideshow, display_ctx: Any) -> None:
+        """Paint an animated status message until the first photo appears.
+
+        Avoids an ambiguous black screen while the display is still connecting
+        to the server or waiting for the first item to download.
+        """
+        import pygame  # noqa: PLC0415 -- hardware-optional import deferred to runtime
+
+        screen = display_ctx.screen
+        if screen is None:
+            return
+        font = pygame.font.SysFont(None, 52)
+        cx, cy = display_ctx.width // 2, display_ctx.height // 2
+        dots = 0
+        while slideshow.current is None:
+            dots = (dots % 3) + 1
+            screen.fill((12, 13, 16))
+            text = font.render(
+                "Connecting to your photos" + "." * dots, True, (228, 228, 234)
+            )
+            screen.blit(text, text.get_rect(center=(cx, cy)))
+            pygame.display.flip()
+            await asyncio.sleep(0.6)
 
     def _build_producer(self, cache_dir: Any) -> ProducerType:
         """Select the initial media producer based on configuration."""
