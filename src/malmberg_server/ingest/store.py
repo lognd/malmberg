@@ -318,8 +318,9 @@ class MediaStore:
 
         Returns a dict with keys ``total``, ``images``, ``videos``,
         ``undated`` (items with no ``meta.taken_at``), ``earliest``,
-        ``latest`` (ISO-8601 strings or None), and ``by_year`` (a dict of
-        4-digit year string -> count, for dated items only).
+        ``latest`` (ISO-8601 strings or None), ``by_year`` (a dict of
+        4-digit year string -> count) and ``by_month`` (a dict of
+        ``YYYY-MM`` string -> count), both for dated items only.
         """
         items = [
             it
@@ -331,9 +332,12 @@ class MediaStore:
         dated = [it.meta.taken_at for it in items if it.meta.taken_at is not None]
         undated = len(items) - len(dated)
         by_year: dict[str, int] = {}
+        by_month: dict[str, int] = {}
         for dt in dated:
             year = str(dt.year)
             by_year[year] = by_year.get(year, 0) + 1
+            month = f"{dt.year:04d}-{dt.month:02d}"
+            by_month[month] = by_month.get(month, 0) + 1
         return {
             "total": len(items),
             "images": images,
@@ -342,6 +346,7 @@ class MediaStore:
             "earliest": min(dated).isoformat() if dated else None,
             "latest": max(dated).isoformat() if dated else None,
             "by_year": dict(sorted(by_year.items())),
+            "by_month": dict(sorted(by_month.items())),
         }
 
     @staticmethod

@@ -126,6 +126,27 @@ def test_store_list_skips_hidden() -> None:
     assert page.total == 0
 
 
+def test_store_stats_by_month() -> None:
+    s = MediaStore()
+    dates = [
+        datetime(2006, 3, 5),
+        datetime(2006, 3, 20),
+        datetime(2006, 7, 1),
+        datetime(2024, 1, 15),
+    ]
+    for i, dt in enumerate(dates):
+        s.add(
+            _make_item(
+                filename=f"{i}.jpg",
+                server_path=f"p/{i}.jpg",
+                meta=MediaMetadata(sha256=f"h{i}", taken_at=dt),
+            )
+        )
+    stats = s.stats()
+    assert stats["by_year"] == {"2006": 3, "2024": 1}
+    assert stats["by_month"] == {"2006-03": 2, "2006-07": 1, "2024-01": 1}
+
+
 def test_store_patch_not_found() -> None:
     s = MediaStore()
     result = s.patch("nonexistent", {"do_not_display": True})

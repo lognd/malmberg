@@ -151,6 +151,37 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--muted);
   }
   .year-chip b { color: var(--aqua); font-weight: 700; }
+  /* By-month breakdown (year groups, month chips) */
+  #by-month { margin-top: 0.85rem; }
+  .month-group {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .month-group:first-child { border-top: none; }
+  .month-group .mg-year {
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 3.2rem;
+    font-size: 0.85rem;
+  }
+  .month-group .mg-months {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .month-chip {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .month-chip b { color: var(--aqua); font-weight: 700; }
   /* Upload section */
   #dropzone {
     border: 2px dashed var(--border);
@@ -199,15 +230,36 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   #upload-list {
     margin-top: 1rem;
     display: flex;
-    flex-direction: column;
+    /* Newest-finished rows appear at the top so the last uploads stay in view. */
+    flex-direction: column-reverse;
+    justify-content: flex-end;
     gap: 0.6rem;
+    /* Cap the height so 100+ files scroll inside the box instead of running
+       off the end of the page; the list stays scrollable. */
+    max-height: 22rem;
+    overflow-y: auto;
+    padding-right: 0.3rem;
   }
   .row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.7rem 0.9rem;
   }
+  .row .thumb {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    background: var(--bg);
+    display: none;
+  }
+  .row.ok .thumb { display: block; }
+  .row .body { flex: 1 1 auto; min-width: 0; }
   .row .name {
     font-size: 0.88rem;
     font-weight: 700;
@@ -964,6 +1016,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <div id="stats-count">-- <span class="label">photos and videos</span></div>
       <div class="stats-grid" id="stats-grid"></div>
       <div id="by-year"></div>
+      <div id="by-month"></div>
     </section>
 
     <section>
@@ -1115,6 +1168,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var statsCount = document.getElementById("stats-count");
   var statsGrid = document.getElementById("stats-grid");
   var byYear = document.getElementById("by-year");
+  var byMonth = document.getElementById("by-month");
+  var MONTH_NAMES = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  ];
 
   function loadStats() {
     fetch("/stats")
@@ -1146,6 +1204,37 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           chip.innerHTML = "<b></b> " + year;
           chip.querySelector("b").textContent = String(data.by_year[year]);
           byYear.appendChild(chip);
+        });
+        // Granular month breakdown, grouped under each year (newest first).
+        byMonth.innerHTML = "";
+        var byMonthData = data.by_month || {};
+        var monthsByYear = {};
+        Object.keys(byMonthData).forEach(function (ym) {
+          var y = ym.slice(0, 4);
+          (monthsByYear[y] = monthsByYear[y] || []).push(ym);
+        });
+        Object.keys(monthsByYear).sort().reverse().forEach(function (year) {
+          var group = document.createElement("div");
+          group.className = "month-group";
+          var yearEl = document.createElement("div");
+          yearEl.className = "mg-year";
+          yearEl.textContent = year;
+          var monthsEl = document.createElement("div");
+          monthsEl.className = "mg-months";
+          monthsByYear[year].sort().forEach(function (ym) {
+            var mi = parseInt(ym.slice(5, 7), 10) - 1;
+            var chip = document.createElement("span");
+            chip.className = "month-chip";
+            chip.innerHTML = "<b></b> ";
+            chip.querySelector("b").textContent = String(byMonthData[ym]);
+            chip.appendChild(
+              document.createTextNode(MONTH_NAMES[mi] || ym.slice(5, 7))
+            );
+            monthsEl.appendChild(chip);
+          });
+          group.appendChild(yearEl);
+          group.appendChild(monthsEl);
+          byMonth.appendChild(group);
         });
       })
       .catch(function () {
@@ -1202,9 +1291,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       var row = document.createElement("div");
       row.className = "row";
       row.innerHTML =
+        '<img class="thumb" alt="">' +
+        '<div class="body">' +
         '<div class="name"></div>' +
         '<div class="status">Queued</div>' +
-        '<div class="bar-track"><div class="bar-fill"></div></div>';
+        '<div class="bar-track"><div class="bar-fill"></div></div>' +
+        '</div>';
       row.querySelector(".name").textContent = file.name;
       uploadList.appendChild(row);
       return row;
@@ -1251,6 +1343,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         row.className = "row ok";
         fillEl.style.width = "100%";
         statusEl.textContent = "Uploaded";
+        try {
+          var item = JSON.parse(xhr.responseText);
+          if (item && item.id) {
+            var thumb = row.querySelector(".thumb");
+            thumb.src = "/media/" + item.id + "/thumb?size=80";
+          }
+        } catch (e) { /* no thumbnail if the body is not JSON */ }
         done("ok");
       } else if (xhr.status === 409) {
         row.className = "row dup";
