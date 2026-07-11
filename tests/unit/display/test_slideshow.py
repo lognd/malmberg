@@ -141,9 +141,9 @@ async def test_set_producer_swaps() -> None:
 @pytest.mark.asyncio
 async def test_display_adds_to_history() -> None:
     show = _make_slideshow(["h1", "h2"])
-    # Manually enqueue one item to test display_target.
+    # Manually enqueue one item (tagged with the current generation) for display.
     stub = _Stub("direct")
-    await show._queue.put(stub)
+    await show._queue.put((show._generation, stub))
 
     async def _stop_after_one() -> None:
         await show.display_target()
@@ -156,6 +156,28 @@ async def test_display_adds_to_history() -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+    assert stub.displayed
+    assert stub in show.history
+
+
+@pytest.mark.asyncio
+async def test_display_drops_stale_generation() -> None:
+    """An item tagged with a superseded generation is discarded, not shown."""
+    show = _make_slideshow(["a"])
+    stale = _Stub("stale")
+    await show._queue.put((show._generation, stale))
+    show.set_producer(iter([]))  # bumps generation, superseding the queued item
+
+    task = asyncio.create_task(show.display_target())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert not stale.displayed  # dropped because its generation is behind
 
     assert show.current is stub
     assert stub in show.history
