@@ -106,12 +106,18 @@ are `null` rather than an error.
 Returns a paginated list of media items. Hidden items (`do_not_display=true`) are
 excluded.
 
+Items on the returned page whose `meta.schema_version` is behind the server's
+current `META_SCHEMA_VERSION` are transparently re-extracted from the source
+file before being served (see "Lazy metadata refresh" below), so a metadata
+schema change never requires a manual re-ingest of existing files.
+
 **Query parameters**
 
 | Parameter | Type | Default | Constraints | Description |
 |-----------|------|---------|-------------|-------------|
 | `page` | int | `1` | >= 1 | Page number (1-based) |
 | `page_size` | int | `50` | 1--500 | Items per page |
+| `sort` | str | `"id"` | `"id"` \| `"recent"` | `"recent"` orders newest first by `meta.taken_at`, falling back to `meta.ingest_at` |
 
 **Response: `MediaPage`**
 
@@ -133,8 +139,42 @@ Stream the raw file for a media item.
 
 **Response:** binary file content with the appropriate `Content-Type` header.
 
+Like `GET /media`, this transparently refreshes stale metadata for the
+requested item before serving the file (metadata refresh does not affect the
+byte stream returned).
+
 **Errors:**
 - `404` -- item not found in the index, or the file is missing from disk
+
+---
+
+### `GET /upload`
+
+Serves a self-contained, mobile-first HTML page for bulk-uploading photos and
+videos. The page lets an operator pick or drag-and-drop many files at once;
+each file is sent as its own `POST /upload` request from the page's inline
+JavaScript, with a per-file progress bar and a clear success / "already
+exists" (409) / error state, plus an overall summary. No external
+CDNs/fonts/scripts are loaded -- the page works even when the server box is
+offline. (This is a distinct route from `POST /upload` below.)
+
+**Response:** `text/html`
+
+---
+
+### `GET /dashboard`
+
+Serves a self-contained HTML control dashboard: a responsive grid of the most
+recent photos (via `GET /media?sort=recent`, thumbnails via `GET /media/{id}`)
+plus Previous / Next / Pause-Resume slideshow controls and a "now playing"
+readout. The controls call the `/control/*` endpoints below rather than the
+display directly, so the page stays same-origin with the server (no CORS)
+even when opened from a phone.
+
+If `ServerConfig.display_url` is not configured, the controls render disabled
+with a short hint to set `MALMBERG_DISPLAY_URL`.
+
+**Response:** `text/html`
 
 ---
 
@@ -213,6 +253,30 @@ or
 
 ---
 
+### `POST /control/next`, `POST /control/prev`, `POST /control/pause`, `GET /control/status`
+
+Proxy endpoints that forward to the paired display's control API
+(`{display_url}/slideshow/next`, `/slideshow/prev`, `/slideshow/pause`,
+`/status` respectively). These exist so that browser clients (e.g. the
+dashboard page) can control the display same-origin through the server,
+avoiding CORS and keeping the display's control API off the open network.
+
+`display_url` is configured via `ServerConfig.display_url` (env
+`MALMBERG_DISPLAY_URL`, toml key `display_url`), e.g.
+`http://10.0.0.5:8443`.
+
+**Response:** the JSON body returned by the corresponding display endpoint,
+passed through unchanged.
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `503` | No `display_url` configured on the server |
+| `502` | The display could not be reached, or returned an error |
+
+---
+
 ## Data models
 
 ### `MediaItem`
@@ -242,6 +306,27 @@ or
 | `height` | int \| null | Image height in pixels |
 | `duration_s` | float \| null | Video duration in seconds; null for images |
 | `sha256` | str | SHA-256 hex digest of the original file |
+| `schema_version` | int | MediaMetadata schema version this record was extracted with (see "Lazy metadata refresh" below) |
+
+---
+
+### Lazy metadata refresh
+
+Adding a new `MediaMetadata` field never requires re-ingesting existing
+files. The extraction pipeline (`malmberg_server.ingest.media`) stamps every
+freshly-extracted `MediaMetadata` with the current
+`META_SCHEMA_VERSION`. When `GET /media` or `GET /media/{id}` serves an item
+whose `meta.schema_version` is behind that constant, the server re-runs EXIF
+extraction on the file in place, replaces `meta` (preserving
+`do_not_display`, `hide_policy`, `tags`, `dwell_override_s`, and the original
+`meta.ingest_at`), and persists the updated index to
+`logs/media-index.jsonl`. If the source file is missing or extraction fails,
+the stale record is served unchanged and a warning is logged; the refresh is
+retried on the next read.
+
+To add a new metadata field: add it to `MediaMetadata`, populate it in
+`extract_exif`, and bump `META_SCHEMA_VERSION` by one. Existing items
+self-heal the next time they are read.
 
 ---
 

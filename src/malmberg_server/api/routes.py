@@ -5,16 +5,18 @@ from __future__ import annotations
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from malmberg_core import __version__
 from malmberg_core.logging import get_logger
 from malmberg_core.models import HidePolicy, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
+from malmberg_server.api.web import DASHBOARD_PAGE_HTML, UPLOAD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.store import MediaStore
@@ -22,6 +24,13 @@ from malmberg_server.ingest.upload import handle_upload
 from malmberg_server.version import VersionInfo, collect_version_info
 
 _log = get_logger(__name__)
+
+_CONTROL_ROUTES = {
+    "next": ("POST", "/slideshow/next"),
+    "prev": ("POST", "/slideshow/prev"),
+    "pause": ("POST", "/slideshow/pause"),
+    "status": ("GET", "/status"),
+}
 
 
 class ServerStatus(BaseModel):
@@ -110,18 +119,44 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     async def list_media(
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=500),
+        sort: Literal["id", "recent"] = Query(default="id"),
     ) -> MediaPage:
-        return _store.list(page=page, page_size=page_size, skip_hidden=True)
+        result = _store.list(
+            page=page,
+            page_size=page_size,
+            skip_hidden=True,
+            sort=sort,
+            media_root=_media_root(),
+        )
+        if _store.pop_dirty():
+            save = _store.save_to_disk(_index_path())
+            if save.is_err:
+                _log.error("Failed to persist media index after metadata refresh")
+        return result
 
     @app.get("/media/{item_id}")
     async def get_media(item_id: str) -> FileResponse:
-        item = _store.get(item_id)
+        item = _store.get(item_id, media_root=_media_root())
         if item is None:
             raise HTTPException(status_code=404, detail="Media item not found")
+        if _store.pop_dirty():
+            save = _store.save_to_disk(_index_path())
+            if save.is_err:
+                _log.error("Failed to persist media index after metadata refresh")
         path = _media_root() / item.server_path
         if not path.is_file():
             raise HTTPException(status_code=404, detail="File not found on disk")
         return FileResponse(str(path))
+
+    @app.get("/upload", response_class=HTMLResponse)
+    async def upload_page() -> str:
+        """Serve the mobile-first bulk-upload page (drag-and-drop, many files)."""
+        return UPLOAD_PAGE_HTML
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard_page() -> str:
+        """Serve the control dashboard: recent photos grid plus slideshow controls."""
+        return DASHBOARD_PAGE_HTML
 
     @app.post("/upload")
     async def upload(file: UploadFile = File(...)) -> dict:
@@ -162,5 +197,49 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         if save.is_err:
             _log.error("Failed to persist media index after delete")
         return result.danger_ok
+
+    async def _forward_to_display(name: str) -> dict:
+        """Forward a control action to the paired display's control API.
+
+        Raises HTTPException(503) if no display_url is configured, or 502 if
+        the display could not be reached.
+        """
+        if not cfg.display_url:
+            raise HTTPException(
+                status_code=503,
+                detail="No display configured; set MALMBERG_DISPLAY_URL",
+            )
+        method, path = _CONTROL_ROUTES[name]
+        url = cfg.display_url.rstrip("/") + path
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.request(method, url)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError as exc:
+            _log.error("Failed to reach display at %s: %s", url, exc)
+            raise HTTPException(
+                status_code=502, detail="Could not reach paired display"
+            ) from exc
+
+    @app.post("/control/next")
+    async def control_next() -> dict:
+        """Proxy: skip to the next slideshow item on the paired display."""
+        return await _forward_to_display("next")
+
+    @app.post("/control/prev")
+    async def control_prev() -> dict:
+        """Proxy: jump to the previous slideshow item on the paired display."""
+        return await _forward_to_display("prev")
+
+    @app.post("/control/pause")
+    async def control_pause() -> dict:
+        """Proxy: toggle pause/resume on the paired display."""
+        return await _forward_to_display("pause")
+
+    @app.get("/control/status")
+    async def control_status() -> dict:
+        """Proxy: fetch the paired display's current slideshow status."""
+        return await _forward_to_display("status")
 
     return app

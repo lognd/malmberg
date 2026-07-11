@@ -16,6 +16,15 @@ _VIDEO_EXTS = frozenset(
     {".mp4", ".mkv", ".mov", ".m4v", ".qt", ".avi", ".wmv", ".webm"}
 )
 
+META_SCHEMA_VERSION = 1
+"""Current MediaMetadata schema version stamped by extract_exif.
+
+Bump this whenever a field is added to MediaMetadata that requires
+re-reading the source file to populate. Items with a stale
+meta.schema_version are transparently re-extracted on next read (see
+MediaStore) so no manual re-ingest is ever required.
+"""
+
 # EXIF tag IDs we care about, resolved by name for readability.
 _TAG_BY_NAME = {v: k for k, v in ExifTags.TAGS.items()}
 _TAG_DATETIME_ORIGINAL = _TAG_BY_NAME.get("DateTimeOriginal")  # 36867 (Exif sub-IFD)
@@ -48,7 +57,7 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
         return Err(IngestError.IOError)
 
     if path.suffix.lower() in _VIDEO_EXTS:
-        return Ok(MediaMetadata(sha256=digest))
+        return Ok(MediaMetadata(sha256=digest, schema_version=META_SCHEMA_VERSION))
 
     try:
         img = Image.open(path)
@@ -103,6 +112,7 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
             width=width,
             height=height,
             sha256=digest,
+            schema_version=META_SCHEMA_VERSION,
         )
     )
 

@@ -10,6 +10,7 @@ from typani.result import Err, Ok, Result
 from malmberg_core.logging import get_logger
 from malmberg_core.models import MediaItem, MediaPage
 from malmberg_server.ingest.errors import IngestError
+from malmberg_server.ingest.media import META_SCHEMA_VERSION, extract_exif
 
 _log = get_logger(__name__)
 
@@ -26,6 +27,8 @@ class MediaStore:
 
     def __init__(self) -> None:
         self._items: dict[str, MediaItem] = {}
+        self._dirty = False
+        """Set when a lazy metadata refresh mutates an item in-memory."""
 
     # ------------------------------------------------------------------
     # Persistence
@@ -117,9 +120,21 @@ class MediaStore:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, item_id: str) -> Optional[MediaItem]:
-        """Return the item with *item_id*, or None if absent."""
-        return self._items.get(item_id)
+    def get(
+        self, item_id: str, media_root: Optional[Path] = None
+    ) -> Optional[MediaItem]:
+        """Return the item with *item_id*, or None if absent.
+
+        If *media_root* is given and the item's metadata schema is stale, it
+        is transparently re-extracted before being returned (see
+        ``_refresh_if_stale``).
+        """
+        item = self._items.get(item_id)
+        if item is None:
+            return None
+        if media_root is not None:
+            item = self._refresh_if_stale(item, media_root)
+        return item
 
     def list(
         self,
@@ -127,14 +142,28 @@ class MediaStore:
         page: int = 1,
         page_size: int = 50,
         skip_hidden: bool = True,
+        sort: str = "id",
+        media_root: Optional[Path] = None,
     ) -> MediaPage:
-        """Return a paginated slice of the media index."""
+        """Return a paginated slice of the media index.
+
+        *sort* controls ordering: ``"id"`` (default, insertion order) or
+        ``"recent"`` (newest first, by ``meta.taken_at`` falling back to
+        ``meta.ingest_at``). If *media_root* is given, items on the returned
+        page with stale metadata are refreshed in place before being served.
+        """
         all_items = [
             it for it in self._items.values() if not (skip_hidden and it.do_not_display)
         ]
+        if sort == "recent":
+            all_items.sort(
+                key=lambda it: it.meta.taken_at or it.meta.ingest_at, reverse=True
+            )
         total = len(all_items)
         start = (page - 1) * page_size
         chunk = all_items[start : start + page_size]
+        if media_root is not None:
+            chunk = [self._refresh_if_stale(it, media_root) for it in chunk]
         return MediaPage(
             items=chunk,
             total=total,
@@ -142,6 +171,50 @@ class MediaStore:
             page_size=page_size,
             has_next=(start + page_size) < total,
         )
+
+    def pop_dirty(self) -> bool:
+        """Return True if a lazy refresh mutated the index, then clear the flag."""
+        was_dirty, self._dirty = self._dirty, False
+        return was_dirty
+
+    def _refresh_if_stale(self, item: MediaItem, media_root: Path) -> MediaItem:
+        """Re-extract *item*'s metadata if its schema_version is out of date.
+
+        Preserves user-set fields (do_not_display, hide_policy, tags,
+        dwell_override_s) and the original ingest_at timestamp. Re-extraction
+        failures or a missing source file leave the item unchanged.
+        """
+        if item.meta.schema_version >= META_SCHEMA_VERSION:
+            return item
+        path = media_root / item.server_path
+        if not path.is_file():
+            _log.warning(
+                "Cannot refresh stale metadata for %s: file missing at %s",
+                item.id,
+                path,
+            )
+            return item
+        result = extract_exif(path)
+        if result.is_err:
+            _log.warning(
+                "Metadata refresh failed for %s (%s); keeping stale record",
+                item.id,
+                result.danger_err,
+            )
+            return item
+        new_meta = result.danger_ok.model_copy(
+            update={"ingest_at": item.meta.ingest_at}
+        )
+        refreshed = item.model_copy(update={"meta": new_meta})
+        self._items[item.id] = refreshed
+        self._dirty = True
+        _log.info(
+            "Refreshed metadata for %s (schema %d -> %d)",
+            item.id,
+            item.meta.schema_version,
+            META_SCHEMA_VERSION,
+        )
+        return refreshed
 
     def sha256_exists(self, digest: str) -> bool:
         """Return True if any stored item has the given SHA-256 digest."""

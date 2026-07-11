@@ -27,6 +27,13 @@ class MediaMetadata(BaseModel):
     """Duration in seconds for video files; None for images."""
     sha256: str = ""
     """SHA-256 hex digest of the original file."""
+    schema_version: int = 0
+    """MediaMetadata schema version this record was extracted with.
+
+    0 means the item predates schema versioning. Compared against
+    malmberg_server.ingest.media.META_SCHEMA_VERSION on read to decide
+    whether the metadata should be transparently re-extracted.
+    """
 
 
 class MediaItem(BaseModel):

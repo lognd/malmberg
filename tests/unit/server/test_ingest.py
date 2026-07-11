@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from malmberg_core.models import MediaItem, MediaMetadata
 from malmberg_server.ingest.errors import IngestError
-from malmberg_server.ingest.media import extract_exif, sha256_of_file
+from malmberg_server.ingest.media import (
+    META_SCHEMA_VERSION,
+    extract_exif,
+    sha256_of_file,
+)
 from malmberg_server.ingest.store import MediaStore
 
 # ---------------------------------------------------------------------------
@@ -187,3 +192,103 @@ def test_store_sha256_exists() -> None:
     s.add(item)
     assert s.sha256_exists("deadbeef")
     assert not s.sha256_exists("cafebabe")
+
+
+# ---------------------------------------------------------------------------
+# Lazy metadata refresh (schema_version)
+# ---------------------------------------------------------------------------
+
+
+def test_store_get_refreshes_stale_metadata(tmp_path: Path) -> None:
+    """An item with an old meta.schema_version self-heals on GET by id."""
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("Pillow not installed")
+
+    media_root = tmp_path / "media"
+    rel = "2024/01/01/photo.png"
+    (media_root / "2024/01/01").mkdir(parents=True)
+    img = Image.new("RGB", (33, 44), color=(0, 128, 255))
+    img.save(media_root / rel)
+
+    s = MediaStore()
+    item = _make_item(
+        server_path=rel,
+        do_not_display=True,
+        tags=["keepme"],
+        dwell_override_s=12.0,
+        meta=MediaMetadata(sha256="stale", schema_version=0, width=1, height=1),
+    )
+    s.add(item)
+
+    refreshed = s.get(item.id, media_root=media_root)
+    assert refreshed is not None
+    assert refreshed.meta.schema_version == META_SCHEMA_VERSION
+    assert refreshed.meta.width == 33
+    assert refreshed.meta.height == 44
+    # User-set fields survive the refresh.
+    assert refreshed.do_not_display is True
+    assert refreshed.tags == ["keepme"]
+    assert refreshed.dwell_override_s == 12.0
+    assert refreshed.meta.ingest_at == item.meta.ingest_at
+    assert s.pop_dirty() is True
+    # And the in-memory index itself was updated, not just the return value.
+    assert s.get(item.id).meta.schema_version == META_SCHEMA_VERSION
+
+
+def test_store_list_refreshes_stale_metadata(tmp_path: Path) -> None:
+    """Items served by list() are refreshed too, and pop_dirty reports it."""
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("Pillow not installed")
+
+    media_root = tmp_path / "media"
+    rel = "2024/01/01/photo.png"
+    (media_root / "2024/01/01").mkdir(parents=True)
+    Image.new("RGB", (5, 5)).save(media_root / rel)
+
+    s = MediaStore()
+    item = _make_item(
+        server_path=rel,
+        meta=MediaMetadata(sha256="stale", schema_version=0),
+    )
+    s.add(item)
+
+    assert s.pop_dirty() is False
+    page = s.list(media_root=media_root)
+    assert page.items[0].meta.schema_version == META_SCHEMA_VERSION
+    assert s.pop_dirty() is True
+    # No further mutation on a second read.
+    s.list(media_root=media_root)
+    assert s.pop_dirty() is False
+
+
+def test_store_refresh_skips_missing_file(tmp_path: Path) -> None:
+    """A stale item whose backing file is gone is left unchanged."""
+    s = MediaStore()
+    item = _make_item(meta=MediaMetadata(sha256="stale", schema_version=0))
+    s.add(item)
+    result = s.get(item.id, media_root=tmp_path / "media")
+    assert result is not None
+    assert result.meta.schema_version == 0
+    assert s.pop_dirty() is False
+
+
+def test_store_list_sort_recent() -> None:
+    s = MediaStore()
+    older = _make_item(
+        filename="old.jpg",
+        server_path="2024/01/01/old.jpg",
+        meta=MediaMetadata(taken_at=datetime(2020, 1, 1)),
+    )
+    newer = _make_item(
+        filename="new.jpg",
+        server_path="2024/01/01/new.jpg",
+        meta=MediaMetadata(taken_at=datetime(2024, 1, 1)),
+    )
+    s.add(older)
+    s.add(newer)
+    page = s.list(sort="recent")
+    assert [it.filename for it in page.items] == ["new.jpg", "old.jpg"]

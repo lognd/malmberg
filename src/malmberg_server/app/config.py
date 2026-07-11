@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -29,6 +29,11 @@ class ServerConfig(BaseModel):
     """Number of ZFS snapshots to retain (exponential-backoff policy)."""
     log_retention: int = 10
     """Number of log files to retain (same policy as backup_retention)."""
+    display_url: Optional[str] = None
+    """Base URL of the paired display's control API (e.g. http://10.0.0.5:8443).
+
+    When None, the /control/* endpoints return 503 rather than forwarding.
+    """
 
     @field_validator("max_upload_mb")
     @classmethod
@@ -61,6 +66,8 @@ class ServerConfig(BaseModel):
             result["fs_root"] = Path(v)
         if v := os.environ.get("MALMBERG_HIDE_POLICY"):
             result["hide_policy"] = v
+        if v := os.environ.get("MALMBERG_DISPLAY_URL"):
+            result["display_url"] = v
         return result
 
     @classmethod

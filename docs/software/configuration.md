@@ -27,6 +27,7 @@ Config file: `~/.config/malmberg/server.toml` (or the path passed to `--config`)
 | `max_upload_mb` | int | `500` | -- | Maximum file size accepted by `POST /upload` |
 | `backup_retention` | int | `20` | -- | Number of ZFS snapshots to retain (exponential-backoff policy) |
 | `log_retention` | int | `10` | -- | Number of log files to retain (same policy as `backup_retention`) |
+| `display_url` | str \| null | `null` | `MALMBERG_DISPLAY_URL` | Base URL of the paired display's control API (e.g. `http://10.0.0.5:8443`); required for the `/control/*` proxy endpoints and the `/dashboard` controls |
 
 The `hide_policy` field controls what `DELETE /media/{id}` does by default. It can
 also be overridden per item via `PATCH /media/{id}`. See
