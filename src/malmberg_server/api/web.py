@@ -438,6 +438,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: #282828;
     border-color: var(--accent);
   }
+  #loop-toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.7rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #loop-toggle-row input { margin-top: 0.15rem; }
   /* Toasts */
   #toast-stack {
     position: fixed;
@@ -1016,6 +1026,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <div class="yf-label">Show a year on the frame</div>
         <div id="year-filter-buttons"></div>
       </div>
+      <label id="loop-toggle-row">
+        <input type="checkbox" id="loop-toggle">
+        <span>Keep the chosen year or slideshow looping until I stop it.
+        Off (normal) plays it once, then all your photos come back on their
+        own. To stop a loop, press "Play whole library".</span>
+      </label>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
       on the server to enable.</div>
       <div id="restart-row">
@@ -1510,6 +1526,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .then(function () { refreshStatus(); });
   });
 
+  var loopToggle = document.getElementById("loop-toggle");
+  function isLoop() { return !!(loopToggle && loopToggle.checked); }
+  function loopNote(base) {
+    return isLoop()
+      ? base + ' It will keep looping; press "Play whole library" to stop.'
+      : base + " It plays once, then all photos come back.";
+  }
+
   function setActiveYear(btn) {
     var all = yearFilterButtons.querySelectorAll("button");
     for (var i = 0; i < all.length; i++) all[i].classList.remove("yf-active");
@@ -1539,11 +1563,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             setActiveYear(btn);
             runControl(
               btn,
-              "/control/play-query?q=" + encodeURIComponent(year),
+              "/control/play-query?q=" + encodeURIComponent(year) +
+                "&loop=" + isLoop(),
               "POST",
               undefined,
               "...",
-              "Now showing " + year + "."
+              loopNote("Now showing " + year + ".")
             );
           });
           yearFilterButtons.appendChild(btn);
@@ -1982,11 +2007,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           playBtn.addEventListener("click", function () {
             runControl(
               playBtn,
-              "/control/playlist/" + encodeURIComponent(pl.name),
+              "/control/playlist/" + encodeURIComponent(pl.name) +
+                "?loop=" + isLoop(),
               "POST",
               undefined,
               "...",
-              "Playing slideshow \\"" + pl.name + "\\" on the display."
+              loopNote("Playing slideshow \\"" + pl.name + "\\".")
             );
           });
           actions.appendChild(playBtn);

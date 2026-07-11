@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from malmberg_core import __version__
 from malmberg_display.api.routes import build_app
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
@@ -153,7 +155,7 @@ async def test_control_sets_toast() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fake_producer(item_ids=None):
+def _fake_producer(item_ids=None, loop=True):
     """Stand-in producer factory for control tests."""
     return iter([NullDisplayable()])
 
@@ -181,6 +183,30 @@ async def test_show_requires_server_mode() -> None:
     async with asgi_client(app) as c:
         r = await c.post("/slideshow/show/abc")
     assert r.status_code == 409
+
+
+async def test_single_photo_auto_reverts_to_all(monkeypatch) -> None:
+    from malmberg_display.api import routes
+
+    monkeypatch.setattr(routes, "_AUTO_REVERT_SINGLE_S", 0.05)
+    app = build_app(_make_slideshow(), make_producer=_fake_producer)
+    async with asgi_client(app) as c:
+        await c.post("/slideshow/show/abc123")
+        assert (await c.get("/status")).json()["mode"] == "single"
+        await asyncio.sleep(0.2)
+        assert (await c.get("/status")).json()["mode"] == "all"
+
+
+async def test_playlist_loop_flag_controls_revert() -> None:
+    # A looping playlist stays in playlist mode (no auto-revert scheduled).
+    app = build_app(_make_slideshow(), make_producer=_fake_producer)
+    async with asgi_client(app) as c:
+        r = await c.post(
+            "/slideshow/playlist", json={"item_ids": ["a", "b"], "loop": True}
+        )
+        assert r.status_code == 200
+        await asyncio.sleep(0.05)
+        assert (await c.get("/status")).json()["mode"] == "playlist"
 
 
 async def test_video_muted_except_manual_single() -> None:

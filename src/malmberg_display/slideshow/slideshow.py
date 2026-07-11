@@ -50,6 +50,10 @@ class Slideshow:
         self._cursor = -1
         self._paused = False
         self._current: Optional[Displayable] = None
+        # Monotonic count of fresh items whose dwell has completed (not counting
+        # back-navigation revisits); used to detect when a finite playlist has
+        # played all the way through.
+        self._displayed_count = 0
         # One-shot item to display next, bypassing the queue (for Previous).
         self._override: Optional[Displayable] = None
         # Set to cut the current item's dwell short (Next / producer switch).
@@ -113,6 +117,11 @@ class Slideshow:
         return self._current
 
     @property
+    def displayed_count(self) -> int:
+        """Total fresh items fully displayed so far (excludes back-navigation)."""
+        return self._displayed_count
+
+    @property
     def history(self) -> list[Displayable]:
         """Snapshot of the display history, newest first."""
         return list(reversed(self._history))
@@ -144,6 +153,7 @@ class Slideshow:
             if self._paused:
                 await asyncio.sleep(0.1)
                 continue
+            fresh = self._override is None
             if self._override is not None:
                 # Back-navigation: show the item without re-recording history.
                 item = self._override
@@ -160,3 +170,5 @@ class Slideshow:
                 self._cursor = len(self._history) - 1
             self._skip.clear()  # fresh skip window for this item's dwell
             await item.display(self._display_ctx)
+            if fresh:
+                self._displayed_count += 1

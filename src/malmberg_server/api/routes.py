@@ -470,20 +470,30 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         )
 
     @app.post("/control/playlist/{name}")
-    async def control_playlist(name: str) -> dict:
-        """Proxy: play the programmed slideshow *name* on the paired display."""
+    async def control_playlist(name: str, loop: bool = Query(default=False)) -> dict:
+        """Proxy: play the programmed slideshow *name* on the paired display.
+
+        *loop* false (default) plays it once and returns to the whole library;
+        true repeats it until "play all" is pressed.
+        """
         item_ids = _playlists.get(name)
         if item_ids is None:
             raise HTTPException(status_code=404, detail="Playlist not found")
         return await _forward_to_display(
             "playlist",
             path_override="/slideshow/playlist",
-            json_body={"item_ids": item_ids},
+            json_body={"item_ids": item_ids, "loop": loop},
         )
 
     @app.post("/control/play-query")
-    async def control_play_query(q: str = Query(...)) -> dict:
-        """Play only the photos matching a search (e.g. a year) on the display."""
+    async def control_play_query(
+        q: str = Query(...), loop: bool = Query(default=False)
+    ) -> dict:
+        """Play only the photos matching a search (e.g. a year) on the display.
+
+        *loop* false (default) plays the match once and returns to the whole
+        library; true repeats it until "play all" is pressed.
+        """
         page = _store.list(page=1, page_size=500, skip_hidden=True, sort="recent", q=q)
         ids = [it.id for it in page.items]
         if not ids:
@@ -491,7 +501,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         return await _forward_to_display(
             "playlist",
             path_override="/slideshow/playlist",
-            json_body={"item_ids": ids},
+            json_body={"item_ids": ids, "loop": loop},
         )
 
     # ------------------------------------------------------------------

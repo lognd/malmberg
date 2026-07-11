@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 import uvicorn
@@ -19,7 +19,7 @@ from malmberg_display.display.overlay import (
     OverlayRenderer,
     make_geocoder,
 )
-from malmberg_display.display.proto import DisplayContext, LoadContext
+from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
 from malmberg_display.display.toast import Toast
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.directory import load_flat_from_directory
@@ -102,20 +102,27 @@ class DisplayApp:
 
             def make_server_producer(
                 item_ids: Optional[list[str]] = None,
+                loop: bool = True,
             ) -> Optional[ProducerType]:
                 """Build a server producer for all items, or a specific id list.
 
                 Returns None when the display is not in server mode (nothing to
-                target for show/playlist actions).
+                target for show/playlist actions). When *loop* is False the
+                producer yields the ids once in order and then ends (a one-pass
+                playlist); otherwise it repeats forever, shuffling each cycle.
                 """
                 url = self._cfg.server_url
                 if url is None:
                     return None
-                return async_load_infinite(
-                    lambda: ServerProducer(
+
+                def factory() -> AsyncIterator[Displayable]:
+                    return ServerProducer(
                         url, cache_dir, client, item_ids=item_ids
                     ).items()
-                )
+
+                if loop:
+                    return async_load_infinite(factory)
+                return factory()
 
             uvi_cfg = uvicorn.Config(
                 build_app(

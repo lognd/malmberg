@@ -23,6 +23,10 @@ from malmberg_server.api.web import render_dashboard_html
 
 _log = get_logger(__name__)
 
+# How long a manually shown single photo stays up before the display returns to
+# the automatic whole-library slideshow on its own.
+_AUTO_REVERT_SINGLE_S = 60.0
+
 
 def _schedule_self_restart(module: str) -> None:
     """Re-exec the current interpreter running *module* shortly after this call.
@@ -61,6 +65,10 @@ class PlaylistBody(BaseModel):
     """Request body for POST /slideshow/playlist."""
 
     item_ids: list[str]
+    loop: bool = False
+    """When False (default) the slideshow plays through once and then the
+    display returns to the whole library; when True it repeats forever until
+    the viewer presses "play all"."""
 
 
 class DisplayHistoryEntry(BaseModel):
@@ -91,10 +99,58 @@ def build_app(
     """
     app = FastAPI(title="Malmberg Display", version=__version__)
     state = {"mode": "all"}
+    # Pending "single photo -> back to the full slideshow" timer, so a manually
+    # shown photo does not stay up forever (a non-technical viewer never has to
+    # find the "play all" button). Reset on every source switch.
+    revert: dict[str, Optional[asyncio.Task]] = {"task": None}
 
     def _notify(message: str) -> None:
         if toast is not None:
             toast.show(message)
+
+    def _cancel_revert() -> None:
+        task = revert["task"]
+        if task is not None and not task.done():
+            task.cancel()
+        revert["task"] = None
+
+    def _revert_to_all() -> None:
+        """Fall back to the whole-library slideshow (used by both revert timers)."""
+        revert["task"] = None  # firing now; nothing left to cancel
+        if make_producer is None:
+            return
+        producer = make_producer(None)
+        if producer is None:
+            return
+        _switch(producer, "all", "Back to all photos")
+
+    async def _auto_revert_after(delay: float) -> None:
+        """After *delay*s still in single mode, fall back to the whole library."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        if state["mode"] != "single":
+            return
+        _log.info("Auto-reverting from single photo to the full slideshow")
+        _revert_to_all()
+
+    async def _revert_after_playlist(count: int) -> None:
+        """Once *count* fresh items have played, fall back to the whole library.
+
+        Used for a non-looping programmed slideshow so it plays through exactly
+        once and then the display returns to the full library on its own.
+        """
+        target = slideshow.displayed_count + count
+        try:
+            while slideshow.displayed_count < target:
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            return
+        if state["mode"] != "playlist":
+            return
+        _log.info("Programmed slideshow finished a pass; reverting to full library")
+        _revert_to_all()
 
     def _switch(producer: ProducerType, mode: str, message: str) -> None:
         """Swap the producer and preempt the current photo immediately."""
@@ -107,6 +163,13 @@ def build_app(
         # show; the automatic slideshow (all / playlist) stays muted.
         if display_ctx is not None:
             display_ctx.mute_video = mode != "single"
+        # A manually shown single photo auto-reverts to the full slideshow after
+        # a minute; any other switch just clears the pending timer.
+        _cancel_revert()
+        if mode == "single" and make_producer is not None:
+            revert["task"] = asyncio.create_task(
+                _auto_revert_after(_AUTO_REVERT_SINGLE_S)
+            )
         _notify(message)
 
     @app.get("/")
@@ -165,9 +228,22 @@ def build_app(
 
     @app.post("/slideshow/playlist")
     async def play_playlist(body: PlaylistBody) -> dict[str, object]:
-        """Play a programmed slideshow: only these item ids, in order, looping."""
+        """Play a programmed slideshow of these item ids, in order.
+
+        By default (``loop`` false) it plays through once and the display then
+        returns to the whole library; ``loop`` true repeats it forever until the
+        viewer presses "play all".
+        """
         factory = _require_producer()
-        _switch(factory(body.item_ids), "playlist", "Playing slideshow")
+        if body.loop:
+            message = 'Looping this slideshow. Press "Play whole library" to stop.'
+        else:
+            message = "Playing slideshow, then back to all photos"
+        _switch(factory(body.item_ids, loop=body.loop), "playlist", message)
+        if not body.loop and body.item_ids:
+            revert["task"] = asyncio.create_task(
+                _revert_after_playlist(len(body.item_ids))
+            )
         return {"status": "ok", "count": len(body.item_ids)}
 
     @app.post("/slideshow/all")
