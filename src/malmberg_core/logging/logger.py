@@ -17,6 +17,10 @@ def _init() -> None:
     with _CONFIG_PATH.open("rb") as f:
         cfg = toml.load(f)
     logging.config.dictConfig(cfg)
+    # Silence very chatty third-party DEBUG logs (EXIF tag dumps, HTTP wire
+    # traces) that would otherwise drown out our own diagnostics.
+    for noisy in ("PIL", "httpx", "httpcore", "urllib3", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     _initialized = True
 
 
