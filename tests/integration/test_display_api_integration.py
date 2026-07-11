@@ -145,3 +145,38 @@ async def test_control_sets_toast() -> None:
     assert r.status_code == 200
     assert toast.active
     assert toast.message == "Paused"
+
+
+# ---------------------------------------------------------------------------
+# Source-switching controls (show single / playlist / all)
+# ---------------------------------------------------------------------------
+
+
+def _fake_producer(item_ids=None):
+    """Stand-in producer factory for control tests."""
+    return iter([NullDisplayable()])
+
+
+async def test_show_and_playlist_and_all_switch_mode() -> None:
+    ss = _make_slideshow()
+    app = build_app(ss, make_producer=_fake_producer)
+    async with asgi_client(app) as c:
+        r1 = await c.post("/slideshow/show/abc123")
+        assert r1.status_code == 200 and r1.json()["item_id"] == "abc123"
+        s1 = await c.get("/status")
+        assert s1.json()["mode"] == "single"
+
+        r2 = await c.post("/slideshow/playlist", json={"item_ids": ["a", "b", "c"]})
+        assert r2.status_code == 200 and r2.json()["count"] == 3
+        assert (await c.get("/status")).json()["mode"] == "playlist"
+
+        r3 = await c.post("/slideshow/all")
+        assert r3.status_code == 200
+        assert (await c.get("/status")).json()["mode"] == "all"
+
+
+async def test_show_requires_server_mode() -> None:
+    app = build_app(_make_slideshow())  # no make_producer
+    async with asgi_client(app) as c:
+        r = await c.post("/slideshow/show/abc")
+    assert r.status_code == 409

@@ -99,8 +99,28 @@ class DisplayApp:
             from malmberg_display.api.routes import build_app  # local to break cycle
 
             toast = Toast()
+
+            def make_server_producer(
+                item_ids: Optional[list[str]] = None,
+            ) -> Optional[ProducerType]:
+                """Build a server producer for all items, or a specific id list.
+
+                Returns None when the display is not in server mode (nothing to
+                target for show/playlist actions).
+                """
+                url = self._cfg.server_url
+                if url is None:
+                    return None
+                return async_load_infinite(
+                    lambda: ServerProducer(
+                        url, cache_dir, client, item_ids=item_ids
+                    ).items()
+                )
+
             uvi_cfg = uvicorn.Config(
-                build_app(slideshow, toast=toast),
+                build_app(
+                    slideshow, toast=toast, make_producer=make_server_producer
+                ),
                 host=self._cfg.host,
                 port=self._cfg.port,
                 ssl_keyfile=None,

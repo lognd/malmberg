@@ -42,10 +42,25 @@ class Slideshow:
         self._history: deque[Displayable] = deque(maxlen=history_len)
         self._paused = False
         self._current: Optional[Displayable] = None
+        # Set to cut the current item's dwell short (Next / producer switch).
+        self._skip: asyncio.Event = asyncio.Event()
+        display_ctx.skip_event = self._skip
 
     def set_producer(self, producer: ProducerType) -> None:
         """Hot-swap the active producer; takes effect on the next produce cycle."""
         self._producer = producer
+
+    def skip(self) -> None:
+        """Cut the current item's dwell short so the next item shows at once."""
+        self._skip.set()
+
+    def flush(self) -> None:
+        """Discard pre-loaded items so a producer swap takes effect immediately."""
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     def pause(self) -> None:
         """Pause the slideshow; display_target will stop dequeuing."""
@@ -98,4 +113,5 @@ class Slideshow:
             item = await self._queue.get()
             self._current = item
             self._history.append(item)
+            self._skip.clear()  # fresh skip window for this item's dwell
             await item.display(self._display_ctx)

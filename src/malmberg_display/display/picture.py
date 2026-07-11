@@ -157,7 +157,15 @@ class PictureDisplay(Displayable):
             if self._dwell_override_s is not None
             else ctx.dwell_s
         )
-        await asyncio.sleep(dwell)
+        # Interruptible dwell: a Next tap or producer switch sets skip_event to
+        # end the wait early, so manual controls override the queue instantly.
+        if ctx.skip_event is not None:
+            try:
+                await asyncio.wait_for(ctx.skip_event.wait(), timeout=dwell)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(dwell)
 
     async def _crossfade(self, ctx: DisplayContext, next_frame: Any) -> None:
         """Time-based fade to *next_frame* -- smooth even if some frames are slow."""

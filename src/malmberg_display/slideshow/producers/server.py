@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Sequence
 
 import httpx
 
@@ -88,57 +88,101 @@ class ServerProducer:
         server_url: str,
         cache_dir: Path,
         http_client: httpx.AsyncClient,
+        item_ids: Optional[Sequence[str]] = None,
     ) -> None:
         self._url = server_url.rstrip("/")
         self._cache_dir = cache_dir
         self._client = http_client
+        # When set, play only these item ids in this order (a programmed
+        # slideshow or a single "display this photo now"); otherwise play all.
+        self._item_ids = list(item_ids) if item_ids is not None else None
 
     async def items(self) -> AsyncGenerator[CachedItem, None]:
-        """Yield one CachedItem per media item returned by the server."""
+        """Yield CachedItems -- either the whole library or a specific id list."""
+        if self._item_ids is None:
+            async for item in self._stream_all():
+                yield item
+        else:
+            async for item in self._stream_selected(self._item_ids):
+                yield item
+
+    async def _stream_all(self) -> AsyncGenerator[CachedItem, None]:
+        """Yield every media item, streaming page by page for fast startup."""
         page = 1
         while True:
-            try:
-                resp = await self._client.get(
-                    f"{self._url}/media",
-                    params={"page": page, "page_size": 50},
-                    timeout=10.0,
-                )
-                resp.raise_for_status()
-            except httpx.HTTPError as exc:
-                _log.warning("Server request failed (page %d): %s", page, exc)
+            data = await self._fetch_page(page)
+            if data is None:
                 return
-
-            data = resp.json()
             for raw in data.get("items", []):
-                item_id = raw.get("id", "")
-                filename = raw.get("filename", "unknown")
-                cached = self._cache_dir / item_id / filename
-                if not cached.is_file():
-                    ok = await self._download(item_id, filename, cached)
-                    if not ok:
-                        continue
-
-                meta = raw.get("meta") or {}
-                taken_at: Optional[datetime] = None
-                if ts := meta.get("taken_at"):
-                    try:
-                        taken_at = datetime.fromisoformat(ts)
-                    except ValueError:
-                        pass
-
-                yield CachedItem(
-                    cached,
-                    item_id,
-                    taken_at=taken_at,
-                    lat=meta.get("lat"),
-                    lon=meta.get("lon"),
-                    camera_model=meta.get("camera_model"),
-                    dwell_override_s=raw.get("dwell_override_s"),
-                )
-
+                item = await self._item_from_raw(raw)
+                if item is not None:
+                    yield item
             if not data.get("has_next", False):
                 break
             page += 1
+
+    async def _stream_selected(
+        self, item_ids: Sequence[str]
+    ) -> AsyncGenerator[CachedItem, None]:
+        """Yield only *item_ids*, in order, resolving them from the full index."""
+        by_id: dict[str, dict] = {}
+        page = 1
+        while True:
+            data = await self._fetch_page(page)
+            if data is None:
+                break
+            for raw in data.get("items", []):
+                by_id[raw.get("id", "")] = raw
+            if not data.get("has_next", False):
+                break
+            page += 1
+        for item_id in item_ids:
+            raw = by_id.get(item_id)
+            if raw is None:
+                continue
+            item = await self._item_from_raw(raw)
+            if item is not None:
+                yield item
+
+    async def _fetch_page(self, page: int) -> Optional[dict]:
+        """GET one /media page; None on request failure."""
+        try:
+            resp = await self._client.get(
+                f"{self._url}/media",
+                params={"page": page, "page_size": 100},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            _log.warning("Server request failed (page %d): %s", page, exc)
+            return None
+        return resp.json()
+
+    async def _item_from_raw(self, raw: dict) -> Optional[CachedItem]:
+        """Build (downloading if needed) a CachedItem from a raw media record."""
+        item_id = raw.get("id", "")
+        filename = raw.get("filename", "unknown")
+        cached = self._cache_dir / item_id / filename
+        if not cached.is_file():
+            ok = await self._download(item_id, filename, cached)
+            if not ok:
+                return None
+        meta = raw.get("meta") or {}
+        taken_at: Optional[datetime] = None
+        if ts := meta.get("taken_at"):
+            try:
+                taken_at = datetime.fromisoformat(ts)
+            except ValueError:
+                pass
+        return CachedItem(
+            cached,
+            item_id,
+            taken_at=taken_at,
+            lat=meta.get("lat"),
+            lon=meta.get("lon"),
+            camera_model=meta.get("camera_model"),
+            dwell_override_s=raw.get("dwell_override_s"),
+        )
 
     async def _download(self, item_id: str, filename: str, dest: Path) -> bool:
         """Download /media/{item_id} to *dest*.  Returns True on success."""
