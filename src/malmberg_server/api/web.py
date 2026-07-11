@@ -1522,10 +1522,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     <span class="help">
       <button class="help-tip" type="button"
               aria-label="What is this page?">?</button>
-      <span class="help-bubble">This page has two parts. The top section (orange
-      border) controls what shows right now on your TV / photo frame. The bottom
-      section (green border) is your photo library. Tap any "?" for help on that
-      part.</span>
+      <span class="help-bubble">Top (orange) controls your TV frame. Bottom
+      (green) is your photo library.</span>
     </span>
   </div>
 
@@ -1565,10 +1563,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           <span class="help">
             <button class="help-tip" type="button"
                     aria-label="How to show photos on the frame">?</button>
-            <span class="help-bubble">Tap a year to show that year on the TV.
-            "Months" splits a year into months. Or type a year (2006), a month
-            (2006-07), a place (Tampa), or a person's name (Grandma) in the box
-            and press "Show on frame".</span>
+            <span class="help-bubble">Tap a year, or type a year, month, place,
+            or name, then press Show on frame.</span>
           </span>
         </div>
         <div id="frame-quick-row">
@@ -1606,9 +1602,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <span class="help">
           <button class="help-tip" type="button"
                   aria-label="What does looping do?">?</button>
-          <span class="help-bubble">Off (normal): the chosen photos play once,
-          then all your photos come back on their own. On: they keep repeating
-          until you press "Play whole library".</span>
+          <span class="help-bubble">On: repeats until you press Play whole
+          library. Off: plays once, then all photos return.</span>
         </span>
       </div>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
@@ -1646,11 +1641,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <span class="help">
           <button class="help-tip" type="button"
                   aria-label="How search works">?</button>
-          <span class="help-bubble">Fill in any combination of Time, Place,
-          and Person -- the photo grid below shows only photos matching ALL
-          the boxes you fill in. Leave a box empty to ignore it. To put these
-          on the TV instead, use "Show on the frame" up top.
-          </span>
+          <span class="help-bubble">Fill any boxes; the grid shows photos
+          matching all of them. Empty boxes are ignored.</span>
         </span>
       </h2>
       <div class="filter-box-row">
