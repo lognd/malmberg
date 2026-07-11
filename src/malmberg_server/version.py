@@ -89,13 +89,25 @@ def _git(repo: Path | None, *args: str) -> str | None:
 
 
 def _git_dirty(repo: Path | None) -> bool | None:
-    """Return True if the checkout has uncommitted changes, None if unknown."""
+    """Return True if the checkout has uncommitted changes, None if unknown.
+
+    Runs git directly rather than via ``_git`` because empty output here is a
+    meaningful result (a clean tree), not a failure.
+    """
     if repo is None:
         return None
-    status = _git(repo, "status", "--porcelain")
-    if status is None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
-    return status != ""
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() != ""
 
 
 def _openzfs_version() -> str | None:
