@@ -425,9 +425,10 @@ class MediaStore:
     ) -> bool:
         """Return True if *item* matches search query *q*.
 
-        Matches on filename substring, a 4-digit ``meta.taken_at`` year,
-        ``meta.place`` substring, or (when *people* is given) the name of a
-        person detected in this item.
+        Matches on filename substring, a 4-digit ``meta.taken_at`` year, a
+        ``YYYY-MM`` ``meta.taken_at`` year+month, ``meta.place`` substring,
+        or (when *people* is given) the name of a person detected in this
+        item.
         """
         needle = q.strip().lower()
         if needle in item.filename.lower():
@@ -439,6 +440,16 @@ class MediaStore:
             and str(item.meta.taken_at.year) == needle
         ):
             return True
+        if (
+            len(needle) == 7
+            and needle[4] == "-"
+            and needle[:4].isdigit()
+            and needle[5:].isdigit()
+            and item.meta.taken_at is not None
+        ):
+            ym = f"{item.meta.taken_at.year:04d}-{item.meta.taken_at.month:02d}"
+            if ym == needle:
+                return True
         if item.meta.place is not None and needle in item.meta.place.lower():
             return True
         if people is not None and item.person_ids:

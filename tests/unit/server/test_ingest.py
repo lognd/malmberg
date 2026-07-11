@@ -194,6 +194,28 @@ def test_store_matches_query_place() -> None:
     assert page.items[0].filename == "a.jpg"
 
 
+def test_store_matches_query_month() -> None:
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(sha256="h1", taken_at=datetime(2006, 7, 4)),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(sha256="h2", taken_at=datetime(2006, 8, 1)),
+        )
+    )
+    s.add(_make_item(filename="c.jpg", server_path="p/c.jpg"))
+    page = s.list(q="2006-07")
+    assert page.total == 1
+    assert page.items[0].filename == "a.jpg"
+
+
 def test_store_stats_by_place() -> None:
     s = MediaStore()
     s.add(

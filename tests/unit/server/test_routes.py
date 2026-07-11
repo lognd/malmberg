@@ -164,8 +164,8 @@ def test_dashboard_page(client: TestClient) -> None:
     assert 'MALMBERG_ROLE = "server"' in r.text
     # Domain split: "play on the frame" selectors live in the display domain,
     # library search boxes + People review UI live in the library domain.
-    assert 'id="frame-person-play-btn"' in r.text
-    assert 'id="frame-place-play-btn"' in r.text
+    assert 'id="frame-search-play-btn"' in r.text
+    assert 'id="frame-search-input"' in r.text
     assert 'id="people-toggle"' in r.text
     assert 'id="review-backdrop"' in r.text
     assert 'id="by-person"' in r.text

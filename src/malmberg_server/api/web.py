@@ -44,7 +44,28 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     --aqua: #8ec07c;
     --purple: #d3869b;
     --border: #504945;
+    --fg: #ebdbb2;
   }
+  /* Base form controls so every input/select/textarea matches the theme
+     (several were added without local styling and fell back to browser
+     defaults -- white boxes, wrong font). */
+  input[type="text"], input[type="search"], input[type="number"],
+  input:not([type]), select, textarea {
+    font-family: inherit;
+    font-size: 0.9rem;
+    color: var(--text);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.6rem;
+    box-sizing: border-box;
+    min-height: 40px;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  input::placeholder { color: var(--muted); }
   * { box-sizing: border-box; }
   body {
     margin: 0;
@@ -143,12 +164,20 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     gap: 0.4rem;
   }
   .year-chip {
+    font-family: inherit;
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 999px;
-    padding: 0.25rem 0.7rem;
-    font-size: 0.78rem;
+    padding: 0.4rem 0.9rem;
+    min-height: 44px;
+    font-size: 0.9rem;
     color: var(--muted);
+    cursor: pointer;
+  }
+  .year-chip:hover, .year-chip:focus-visible {
+    border-color: var(--accent);
+    color: var(--text);
+    outline: none;
   }
   .year-chip b { color: var(--aqua); font-weight: 700; }
   /* By-month breakdown (year groups, month chips) */
@@ -174,12 +203,20 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     gap: 0.3rem;
   }
   .month-chip {
+    font-family: inherit;
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 999px;
-    padding: 0.15rem 0.55rem;
-    font-size: 0.72rem;
+    padding: 0.3rem 0.7rem;
+    min-height: 40px;
+    font-size: 0.78rem;
     color: var(--muted);
+    cursor: pointer;
+  }
+  .month-chip:hover, .month-chip:focus-visible {
+    border-color: var(--accent);
+    color: var(--text);
+    outline: none;
   }
   .month-chip b { color: var(--aqua); font-weight: 700; }
   /* By-place breakdown, same chip look as by-year */
@@ -190,13 +227,20 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     gap: 0.4rem;
   }
   .place-chip {
+    font-family: inherit;
     background: var(--bg-alt);
     border: 1px solid var(--border);
     border-radius: 999px;
-    padding: 0.25rem 0.7rem;
-    font-size: 0.78rem;
+    padding: 0.4rem 0.9rem;
+    min-height: 44px;
+    font-size: 0.9rem;
     color: var(--muted);
     cursor: pointer;
+  }
+  .place-chip:hover, .place-chip:focus-visible {
+    border-color: var(--accent);
+    color: var(--text);
+    outline: none;
   }
   .place-chip b { color: var(--aqua); font-weight: 700; }
   #place-search-row #place-input { flex: 1 1 auto; }
@@ -238,59 +282,90 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     margin-top: 0.85rem;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.55rem;
+    gap: 0.9rem;
   }
   .person-card {
     background: var(--bg-alt);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.45rem;
-    width: 96px;
+    border-radius: 10px;
+    padding: 0.6rem;
+    width: 148px;
     text-align: center;
   }
-  .person-card img {
-    width: 84px;
-    height: 84px;
+  /* The photo IS the primary control: tapping it opens the review modal.
+     Kept as a real <button> for keyboard access and a visible focus ring. */
+  .person-card .person-photo-btn {
+    display: block;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    cursor: pointer;
+    min-height: 132px;
+  }
+  .person-card .person-photo-btn:hover,
+  .person-card .person-photo-btn:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .person-card .person-photo-btn img {
+    width: 100%;
+    height: 132px;
     object-fit: cover;
     border-radius: 6px;
     background: var(--bg);
     display: block;
   }
   .person-card .person-name {
-    font-size: 0.75rem;
+    font-size: 0.9rem;
     font-weight: 700;
-    margin-top: 0.3rem;
+    margin-top: 0.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .person-card .person-name.unnamed { color: var(--muted); font-weight: 400; }
   .person-card .person-count {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     color: var(--muted);
-    margin: 0.15rem 0 0.3rem;
+    margin: 0.15rem 0 0.5rem;
   }
-  .person-card .person-actions {
-    display: flex;
-    gap: 0.25rem;
-    justify-content: center;
-  }
-  .person-card .person-actions button {
-    flex: 1 1 auto;
-    font-size: 0.68rem;
-    padding: 0.2rem 0.1rem;
+  /* Big, obvious naming control right on the card -- no tiny action row. */
+  .person-card .person-name-btn {
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    padding: 0.4rem 0.5rem;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    color: var(--fg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--accent);
     cursor: pointer;
   }
-  .person-card .person-name-edit { margin-top: 0.3rem; display: none; }
+  .person-card .person-name-btn:hover,
+  .person-card .person-name-btn:focus-visible {
+    background: var(--accent);
+    color: #282828;
+    outline: none;
+  }
+  .person-card .person-name-edit { margin-top: 0.5rem; display: none; }
   .person-card .person-name-edit.show { display: block; }
   .person-card .person-name-edit input {
     width: 100%;
-    font-size: 0.72rem;
-    padding: 0.2rem;
+    font-size: 0.9rem;
+    min-height: 44px;
+    padding: 0.4rem;
     box-sizing: border-box;
+    margin-bottom: 0.35rem;
+  }
+  .person-card .person-name-edit button {
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.85rem;
+    font-weight: 700;
   }
   /* Review modal (per-person face review + green boxes + overrides) */
   #review-backdrop {
@@ -322,19 +397,30 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--muted);
     cursor: pointer;
   }
-  #review-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.6rem; }
+  #review-title { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.7rem; }
   .review-tools {
     display: flex;
-    gap: 0.4rem;
-    margin-bottom: 0.5rem;
+    gap: 0.5rem;
+    margin-bottom: 0.7rem;
     flex-wrap: wrap;
   }
-  .review-tools input { flex: 1 1 auto; min-width: 8rem; }
+  .review-tools input {
+    flex: 1 1 auto;
+    min-width: 10rem;
+    font-size: 1rem;
+    min-height: 48px;
+  }
+  .review-tools button {
+    min-height: 48px;
+    padding: 0.4rem 1.1rem;
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
   #review-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 0.6rem;
-    margin-top: 0.7rem;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 0.9rem;
   }
   .review-face { text-align: center; }
   .review-face-imgwrap {
@@ -342,28 +428,118 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     display: inline-block;
     max-width: 100%;
     line-height: 0;
+    cursor: zoom-in;
   }
   .review-face-imgwrap img {
     max-width: 100%;
     border-radius: 6px;
     display: block;
   }
+  /* Corner brackets, not a solid box: the markers sit OUTSIDE the face
+     (the drawn rect is padded beyond the bbox in JS) so the face itself
+     stays fully visible, with a dark outline for contrast on light
+     backgrounds too. */
   .review-face-box {
     position: absolute;
-    border: 3px solid #b8bb26;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
-    border-radius: 2px;
     pointer-events: none;
   }
-  .review-face button {
+  .review-face-box .corner {
+    position: absolute;
+    width: 22%;
+    height: 22%;
+    max-width: 26px;
+    max-height: 26px;
+    border-color: #b8bb26;
+    filter: drop-shadow(0 0 1px #1d2021) drop-shadow(0 0 1px #1d2021);
+  }
+  .review-face-box .corner.tl {
+    top: 0; left: 0;
+    border-top: 4px solid #b8bb26;
+    border-left: 4px solid #b8bb26;
+  }
+  .review-face-box .corner.tr {
+    top: 0; right: 0;
+    border-top: 4px solid #b8bb26;
+    border-right: 4px solid #b8bb26;
+  }
+  .review-face-box .corner.bl {
+    bottom: 0; left: 0;
+    border-bottom: 4px solid #b8bb26;
+    border-left: 4px solid #b8bb26;
+  }
+  .review-face-box .corner.br {
+    bottom: 0; right: 0;
+    border-bottom: 4px solid #b8bb26;
+    border-right: 4px solid #b8bb26;
+  }
+  .review-face-zoom-hint {
     margin-top: 0.3rem;
     font-size: 0.72rem;
-    padding: 0.25rem 0.5rem;
+    color: var(--muted);
+  }
+  .review-face button {
+    margin-top: 0.5rem;
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 0.4rem 0.5rem;
     background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    color: var(--fg);
+    border: 1px solid var(--err);
+    border-radius: 6px;
+    color: var(--err);
     cursor: pointer;
+  }
+  .review-face button:hover, .review-face button:focus-visible {
+    background: var(--err);
+    color: #282828;
+    outline: none;
+  }
+  /* Zoomed face view: a big crop-and-enlarge of one face, opened by
+     tapping a review photo. Dependency-free (plain canvas). */
+  #face-zoom-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: none;
+    z-index: 70;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  #face-zoom-backdrop.show { display: flex; }
+  #face-zoom-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    max-width: 92vw;
+    max-height: 92vh;
+    text-align: center;
+    position: relative;
+  }
+  #face-zoom-close {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.6rem;
+    font-size: 1.8rem;
+    min-width: 44px;
+    min-height: 44px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #face-zoom-canvas {
+    max-width: 80vw;
+    max-height: 75vh;
+    border-radius: 8px;
+    background: var(--bg-alt);
+  }
+  #face-zoom-hint {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    color: var(--muted);
   }
   #frame-place-row, #frame-person-row { margin-top: 0.4rem; }
   /* Upload section */
@@ -602,10 +778,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     gap: 0.4rem;
   }
   #year-filter-buttons button {
-    min-height: 40px;
-    min-width: 44px;
-    padding: 0 0.7rem;
-    font-size: 0.8rem;
+    min-height: 44px;
+    min-width: 48px;
+    padding: 0 0.8rem;
+    font-size: 0.9rem;
     font-weight: 700;
     border-radius: 999px;
     border: 1px solid var(--border);
@@ -622,6 +798,47 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: #282828;
     border-color: var(--accent);
   }
+  #month-filter-toggle { margin-top: 0.6rem; min-height: 44px; padding: 0.3rem 0.9rem; }
+  #month-filter-buttons {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  #month-filter-buttons.collapsed { display: none; }
+  #month-filter-buttons .mfb-year {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 0.85rem;
+  }
+  #month-filter-buttons .mfb-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.25rem;
+  }
+  #month-filter-buttons button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 0.7rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #month-filter-buttons button.yf-active {
+    background: var(--accent);
+    color: #282828;
+    border-color: var(--accent);
+  }
+  #frame-search-row #frame-search-input { flex: 1 1 auto; }
+  #frame-search-row button, #frame-search-play-btn {
+    min-height: 44px;
+    padding: 0.4rem 1rem;
+  }
   #loop-toggle-row {
     display: flex;
     align-items: flex-start;
@@ -632,6 +849,100 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     cursor: pointer;
   }
   #loop-toggle-row input { margin-top: 0.15rem; }
+  /* Page header + help button */
+  #page-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  #page-head-row h1 { margin: 0.25rem 0; }
+  #help-btn {
+    min-height: 44px;
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    background: var(--bg-alt);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  #help-btn:hover, #help-btn:focus-visible {
+    background: var(--accent); color: #282828; outline: none;
+  }
+  /* Onboarding walkthrough: large, plain-language, dependency-free. */
+  #walkthrough-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: none;
+    z-index: 80;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  #walkthrough-backdrop.show { display: flex; }
+  #walkthrough-card {
+    background: var(--bg);
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 1.6rem 1.4rem;
+    max-width: 480px;
+    width: 100%;
+    text-align: center;
+  }
+  #walkthrough-step-text {
+    font-size: 1.15rem;
+    line-height: 1.5;
+    color: var(--text);
+    min-height: 6rem;
+  }
+  #walkthrough-dots {
+    display: flex;
+    justify-content: center;
+    gap: 0.4rem;
+    margin: 1rem 0;
+  }
+  #walkthrough-dots span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border);
+    display: inline-block;
+  }
+  #walkthrough-dots span.on { background: var(--accent); }
+  #walkthrough-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  #walkthrough-actions button {
+    min-height: 48px;
+    min-width: 96px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    padding: 0.5rem 1.2rem;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  #walkthrough-skip {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  #walkthrough-back {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  #walkthrough-next {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: #282828;
+  }
   /* Toasts */
   #toast-stack {
     position: fixed;
@@ -1174,7 +1485,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <main>
-  <h1>Malmberg Dashboard</h1>
+  <div id="page-head-row">
+    <h1>Malmberg Dashboard</h1>
+    <button id="help-btn" type="button">Help / show me around</button>
+  </div>
 
   <div class="domain domain-display">
     <div class="domain-head">Control the photo frame</div>
@@ -1207,19 +1521,21 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <select id="display-select" disabled></select>
       </div>
       <div id="frame-filter-group">
-        <div class="yf-label">Show a person, place, or year on the frame</div>
+        <div class="yf-label">Quick pick a year to show on the frame</div>
         <div id="year-filter-buttons"></div>
-        <div class="search-row" id="frame-place-row">
-          <input id="frame-place-input" type="text" autocomplete="off"
-            list="frame-place-suggestions" placeholder="A place, e.g. Tampa">
-          <datalist id="frame-place-suggestions"></datalist>
-          <button id="frame-place-play-btn" type="button">Play place</button>
+        <button id="month-filter-toggle" type="button" class="collapse-btn">
+          Show months
+        </button>
+        <div id="month-filter-buttons" class="collapsed"></div>
+        <div class="yf-label" id="frame-search-label">
+          Or type a year, month, place, or person's name to show on the frame
         </div>
-        <div class="search-row" id="frame-person-row">
-          <input id="frame-person-input" type="text" autocomplete="off"
-            list="frame-person-suggestions" placeholder="A person's name">
-          <datalist id="frame-person-suggestions"></datalist>
-          <button id="frame-person-play-btn" type="button">Play person</button>
+        <div class="search-row" id="frame-search-row">
+          <input id="frame-search-input" type="text" autocomplete="off"
+            list="frame-search-suggestions" aria-labelledby="frame-search-label"
+            placeholder="e.g. 2006, 2006-07, Tampa, or Grandma">
+          <datalist id="frame-search-suggestions"></datalist>
+          <button id="frame-search-play-btn" type="button">Show on frame</button>
         </div>
       </div>
       <label id="loop-toggle-row">
@@ -1375,6 +1691,18 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   <footer>Malmberg self-hosted photo frame</footer>
 </main>
 
+<div id="walkthrough-backdrop">
+  <div id="walkthrough-card">
+    <div id="walkthrough-step-text"></div>
+    <div id="walkthrough-dots"></div>
+    <div id="walkthrough-actions">
+      <button id="walkthrough-skip" type="button">Skip</button>
+      <button id="walkthrough-back" type="button">Back</button>
+      <button id="walkthrough-next" type="button">Next</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-stack"></div>
 
 <div id="modal-backdrop">
@@ -1417,10 +1745,21 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <button id="review-merge-btn" type="button">Merge</button>
     </div>
     <div class="domain-sub">
-      Each photo shows a green box around the face grouped here. If a box is
-      the wrong person, press "Not this person" to split it off.
+      Each photo shows green corner marks around the face grouped here (the
+      marks sit just outside the face so they do not cover it). Tap a photo
+      to zoom in and see the face up close. If a face is the wrong person,
+      press "Not this person" to split it off.
     </div>
     <div id="review-grid"></div>
+  </div>
+</div>
+
+<div id="face-zoom-backdrop">
+  <div id="face-zoom-card">
+    <button id="face-zoom-close" type="button"
+            aria-label="Close zoomed photo">&times;</button>
+    <canvas id="face-zoom-canvas"></canvas>
+    <div id="face-zoom-hint">Tap anywhere outside this photo to close.</div>
   </div>
 </div>
 
@@ -1513,10 +1852,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         });
         byYear.innerHTML = "";
         Object.keys(data.by_year || {}).sort().forEach(function (year) {
-          var chip = document.createElement("span");
+          var chip = document.createElement("button");
+          chip.type = "button";
           chip.className = "year-chip";
           chip.innerHTML = "<b></b> " + year;
           chip.querySelector("b").textContent = String(data.by_year[year]);
+          chip.title = "Search and browse " + year;
+          chip.setAttribute("aria-label", "Search and browse photos from " + year);
+          chip.addEventListener("click", function () {
+            searchInput.value = year;
+            state.q = year;
+            state.page = 1;
+            loadGrid();
+          });
           byYear.appendChild(chip);
         });
         // Granular month breakdown, grouped under each year (newest first).
@@ -1537,13 +1885,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           monthsEl.className = "mg-months";
           monthsByYear[year].sort().forEach(function (ym) {
             var mi = parseInt(ym.slice(5, 7), 10) - 1;
-            var chip = document.createElement("span");
+            var monthName = MONTH_NAMES[mi] || ym.slice(5, 7);
+            var chip = document.createElement("button");
+            chip.type = "button";
             chip.className = "month-chip";
             chip.innerHTML = "<b></b> ";
             chip.querySelector("b").textContent = String(byMonthData[ym]);
-            chip.appendChild(
-              document.createTextNode(MONTH_NAMES[mi] || ym.slice(5, 7))
+            chip.appendChild(document.createTextNode(monthName));
+            chip.title = "Search and browse " + monthName + " " + year;
+            chip.setAttribute(
+              "aria-label",
+              "Search and browse photos from " + monthName + " " + year
             );
+            chip.addEventListener("click", function () {
+              searchInput.value = ym;
+              state.q = ym;
+              state.page = 1;
+              loadGrid();
+            });
             monthsEl.appendChild(chip);
           });
           group.appendChild(yearEl);
@@ -1553,12 +1912,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         byPlace.innerHTML = "";
         var byPlaceData = data.by_place || {};
         Object.keys(byPlaceData).forEach(function (place) {
-          var chip = document.createElement("span");
+          var chip = document.createElement("button");
+          chip.type = "button";
           chip.className = "place-chip";
           chip.innerHTML = "<b></b> ";
           chip.querySelector("b").textContent = String(byPlaceData[place]);
           chip.appendChild(document.createTextNode(place));
           chip.title = "Search and browse " + place;
+          chip.setAttribute("aria-label", "Search and browse photos from " + place);
           chip.addEventListener("click", function () {
             searchInput.value = place;
             state.q = place;
@@ -1571,12 +1932,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         byPerson.innerHTML = "";
         var byPersonData = data.by_person || {};
         Object.keys(byPersonData).forEach(function (name) {
-          var chip = document.createElement("span");
+          var chip = document.createElement("button");
+          chip.type = "button";
           chip.className = "place-chip";
           chip.innerHTML = "<b></b> ";
           chip.querySelector("b").textContent = String(byPersonData[name]);
           chip.appendChild(document.createTextNode(name));
           chip.title = "Search and browse photos of " + name;
+          chip.setAttribute("aria-label", "Search and browse photos of " + name);
           chip.addEventListener("click", function () {
             searchInput.value = name;
             state.q = name;
@@ -1734,6 +2097,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var btnPlayAll = document.getElementById("btn-play-all");
   var displaySelect = document.getElementById("display-select");
   var yearFilterButtons = document.getElementById("year-filter-buttons");
+  var monthFilterButtons = document.getElementById("month-filter-buttons");
+  var monthFilterToggle = document.getElementById("month-filter-toggle");
+  monthFilterToggle.addEventListener("click", function () {
+    var collapsed = monthFilterButtons.classList.toggle("collapsed");
+    monthFilterToggle.textContent = collapsed ? "Show months" : "Hide months";
+  });
 
   var lastCurrentItemId = null;
   var lastDisplaysKey = null;
@@ -1840,6 +2209,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (btn) btn.classList.add("yf-active");
   }
 
+  function setActiveMonth(btn) {
+    var all = monthFilterButtons.querySelectorAll("button");
+    for (var i = 0; i < all.length; i++) all[i].classList.remove("yf-active");
+    if (btn) btn.classList.add("yf-active");
+  }
+
   function loadYearFilter() {
     fetch("/stats")
       .then(function (r) { return r.json(); })
@@ -1861,6 +2236,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           btn.textContent = year;
           btn.addEventListener("click", function () {
             setActiveYear(btn);
+            setActiveMonth(null);
             runControl(
               btn,
               "/control/play-query?q=" + encodeURIComponent(year) +
@@ -1872,6 +2248,57 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             );
           });
           yearFilterButtons.appendChild(btn);
+        });
+      })
+      .catch(function () {});
+  }
+
+  /* Month quick-pick buttons, grouped by year, revealed by "Show months"
+     (kept collapsed by default since a full month grid is a lot of
+     buttons for a first-time visitor). */
+  function loadMonthFilter() {
+    fetch("/stats")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        monthFilterButtons.innerHTML = "";
+        var byMonthData = data.by_month || {};
+        var monthsByYear = {};
+        Object.keys(byMonthData).forEach(function (ym) {
+          var y = ym.slice(0, 4);
+          (monthsByYear[y] = monthsByYear[y] || []).push(ym);
+        });
+        Object.keys(monthsByYear).sort().reverse().forEach(function (year) {
+          var yearEl = document.createElement("div");
+          yearEl.className = "mfb-year";
+          yearEl.textContent = year;
+          var row = document.createElement("div");
+          row.className = "mfb-row";
+          monthsByYear[year].sort().forEach(function (ym) {
+            var mi = parseInt(ym.slice(5, 7), 10) - 1;
+            var monthName = MONTH_NAMES[mi] || ym.slice(5, 7);
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = monthName;
+            btn.setAttribute(
+              "aria-label", "Show " + monthName + " " + year + " on the frame"
+            );
+            btn.addEventListener("click", function () {
+              setActiveYear(null);
+              setActiveMonth(btn);
+              runControl(
+                btn,
+                "/control/play-query?q=" + encodeURIComponent(ym) +
+                  "&loop=" + isLoop(),
+                "POST",
+                undefined,
+                "...",
+                loopNote("Now showing " + monthName + " " + year + ".")
+              );
+            });
+            row.appendChild(btn);
+          });
+          monthFilterButtons.appendChild(yearEl);
+          monthFilterButtons.appendChild(row);
         });
       })
       .catch(function () {});
@@ -2171,48 +2598,64 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   loadPlaceSuggestions("", placeSuggestions);
   loadPersonSuggestions("", personSuggestions);
 
-  /* ---- Frame selectors: play a place / person on the frame ---- */
-  var framePlaceInput = document.getElementById("frame-place-input");
-  var framePlaceSuggestions = document.getElementById("frame-place-suggestions");
-  var framePlacePlayBtn = document.getElementById("frame-place-play-btn");
-  var framePersonInput = document.getElementById("frame-person-input");
-  var framePersonSuggestions = document.getElementById("frame-person-suggestions");
-  var framePersonPlayBtn = document.getElementById("frame-person-play-btn");
-  var framePlaceDebounce = null;
-  var framePersonDebounce = null;
+  /* ---- Frame manual search: one box covers year, month, place, or
+     person, since the server's play-query matcher handles all four. ---- */
+  var frameSearchInput = document.getElementById("frame-search-input");
+  var frameSearchSuggestions = document.getElementById("frame-search-suggestions");
+  var frameSearchPlayBtn = document.getElementById("frame-search-play-btn");
+  var frameSearchDebounce = null;
 
-  framePlaceInput.addEventListener("input", function () {
-    if (framePlaceDebounce) window.clearTimeout(framePlaceDebounce);
-    framePlaceDebounce = window.setTimeout(function () {
-      loadPlaceSuggestions(framePlaceInput.value.trim(), framePlaceSuggestions);
+  function loadFrameSuggestions(prefix) {
+    Promise.all([
+      fetch("/places?q=" + encodeURIComponent(prefix) + "&limit=10")
+        .then(function (r) { return r.json(); })
+        .catch(function () { return []; }),
+      fetch("/people/suggest?q=" + encodeURIComponent(prefix) + "&limit=10")
+        .then(function (r) { return r.json(); })
+        .catch(function () { return []; }),
+    ]).then(function (results) {
+      var places = results[0] || [];
+      var people = results[1] || [];
+      frameSearchSuggestions.innerHTML = "";
+      places.forEach(function (place) {
+        var opt = document.createElement("option");
+        opt.value = place;
+        frameSearchSuggestions.appendChild(opt);
+      });
+      people.forEach(function (name) {
+        var opt = document.createElement("option");
+        opt.value = name;
+        frameSearchSuggestions.appendChild(opt);
+      });
+    });
+  }
+
+  frameSearchInput.addEventListener("input", function () {
+    if (frameSearchDebounce) window.clearTimeout(frameSearchDebounce);
+    frameSearchDebounce = window.setTimeout(function () {
+      loadFrameSuggestions(frameSearchInput.value.trim());
     }, 350);
   });
-  framePersonInput.addEventListener("input", function () {
-    if (framePersonDebounce) window.clearTimeout(framePersonDebounce);
-    framePersonDebounce = window.setTimeout(function () {
-      loadPersonSuggestions(framePersonInput.value.trim(), framePersonSuggestions);
-    }, 350);
+
+  function playFrameSearch() {
+    var query = frameSearchInput.value.trim();
+    if (!query) {
+      showToast("Type a year, month, place, or name first.", "err");
+      return;
+    }
+    setActiveYear(null);
+    setActiveMonth(null);
+    runControl(frameSearchPlayBtn,
+      "/control/play-query?q=" + encodeURIComponent(query) + "&loop=" + isLoop(),
+      "POST", undefined, "...",
+      loopNote('Now showing "' + query + '".'));
+  }
+  frameSearchPlayBtn.addEventListener("click", playFrameSearch);
+  frameSearchInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") playFrameSearch();
   });
 
-  framePlacePlayBtn.addEventListener("click", function () {
-    var place = framePlaceInput.value.trim();
-    if (!place) { showToast("Type a place first.", "err"); return; }
-    runControl(framePlacePlayBtn,
-      "/control/play-query?q=" + encodeURIComponent(place) + "&loop=" + isLoop(),
-      "POST", undefined, "...",
-      loopNote('Now showing photos from "' + place + '".'));
-  });
-  framePersonPlayBtn.addEventListener("click", function () {
-    var name = framePersonInput.value.trim();
-    if (!name) { showToast("Type a person's name first.", "err"); return; }
-    runControl(framePersonPlayBtn,
-      "/control/play-query?q=" + encodeURIComponent(name) + "&loop=" + isLoop(),
-      "POST", undefined, "...",
-      loopNote('Now showing photos of "' + name + '".'));
-  });
-
-  loadPlaceSuggestions("", framePlaceSuggestions);
-  loadPersonSuggestions("", framePersonSuggestions);
+  loadFrameSuggestions("");
 
   /* ---- People: compact collapsible cards, naming, review, merge ---- */
   var peopleGrid = document.getElementById("people-grid");
@@ -2244,51 +2687,62 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   function makePersonCard(person) {
     var card = document.createElement("div");
     card.className = "person-card";
+
+    /* The photo is the primary click target -- tapping it opens the
+       review modal directly (no small button row to misclick). */
+    var photoBtn = document.createElement("button");
+    photoBtn.type = "button";
+    photoBtn.className = "person-photo-btn";
+    photoBtn.setAttribute(
+      "aria-label",
+      "Review photos of " + (person.name || "this unnamed person")
+    );
     var img = document.createElement("img");
     img.src = person.sample_item_id
       ? "/media/" + person.sample_item_id + "/thumb?size=200" : "";
     img.alt = person.name || "Unnamed person";
-    card.appendChild(img);
-    if (person.name) {
-      var nameEl = document.createElement("div");
-      nameEl.className = "person-name";
-      nameEl.textContent = person.name;
-      card.appendChild(nameEl);
-    }
+    photoBtn.appendChild(img);
+    photoBtn.addEventListener("click", function () { openReview(person); });
+    card.appendChild(photoBtn);
+
+    var nameEl = document.createElement("div");
+    nameEl.className = "person-name" + (person.name ? "" : " unnamed");
+    nameEl.textContent = person.name || "Unnamed person";
+    card.appendChild(nameEl);
+
     var count = document.createElement("div");
     count.className = "person-count";
     count.textContent = person.count + " photo" + (person.count === 1 ? "" : "s");
     card.appendChild(count);
 
-    var actions = document.createElement("div");
-    actions.className = "person-actions";
+    /* One big, obvious naming control -- no cramped inline buttons. */
     var nameBtn = document.createElement("button");
     nameBtn.type = "button";
-    nameBtn.textContent = person.name ? "Rename" : "Name";
-    var reviewBtn = document.createElement("button");
-    reviewBtn.type = "button";
-    reviewBtn.textContent = "Review";
-    actions.appendChild(nameBtn);
-    actions.appendChild(reviewBtn);
-    card.appendChild(actions);
+    nameBtn.className = "person-name-btn";
+    nameBtn.textContent = person.name ? "Rename this person" : "Name this person";
 
     var editWrap = document.createElement("div");
     editWrap.className = "person-name-edit";
     var editInput = document.createElement("input");
     editInput.type = "text";
     editInput.placeholder = "Name this person";
+    editInput.setAttribute("aria-label", "Name this person");
     editInput.value = person.name || "";
+    var saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = "Save name";
     editWrap.appendChild(editInput);
+    editWrap.appendChild(saveBtn);
+    card.appendChild(nameBtn);
     card.appendChild(editWrap);
 
     nameBtn.addEventListener("click", function () {
       var showing = editWrap.classList.toggle("show");
       if (showing) editInput.focus();
     });
-    editInput.addEventListener("keydown", function (ev) {
-      if (ev.key !== "Enter") return;
+    function saveEditedName() {
       var newName = editInput.value.trim();
-      if (!newName) return;
+      if (!newName) { showToast("Type a name first.", "err"); return; }
       postName(person.id, newName)
         .then(function (r) {
           if (!r.ok) throw new Error("failed");
@@ -2296,8 +2750,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           loadPeople(); loadStats(); refreshPersonDatalists();
         })
         .catch(function () { showToast("Could not save name.", "err"); });
+    }
+    saveBtn.addEventListener("click", saveEditedName);
+    editInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") saveEditedName();
     });
-    reviewBtn.addEventListener("click", function () { openReview(person); });
     return card;
   }
 
@@ -2337,15 +2794,46 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (ev.target === reviewBackdrop) closeReview();
   });
 
+  /* Padding applied around the face bbox before drawing the corner
+     markers, so the lines sit outside the face instead of on top of it
+     (a fraction of the bbox's own size, both axes). */
+  var FACE_BOX_PAD = 0.12;
+
+  function paddedBox(bbox, iw, ih) {
+    var w = bbox[2] - bbox[0];
+    var h = bbox[3] - bbox[1];
+    var px = w * FACE_BOX_PAD;
+    var py = h * FACE_BOX_PAD;
+    return [
+      Math.max(0, bbox[0] - px),
+      Math.max(0, bbox[1] - py),
+      Math.min(iw || bbox[2] + px, bbox[2] + px),
+      Math.min(ih || bbox[3] + py, bbox[3] + py),
+    ];
+  }
+
+  function makeCornerBox() {
+    var box = document.createElement("div");
+    box.className = "review-face-box";
+    ["tl", "tr", "bl", "br"].forEach(function (pos) {
+      var corner = document.createElement("div");
+      corner.className = "corner " + pos;
+      box.appendChild(corner);
+    });
+    return box;
+  }
+
   function renderFaceBox(row) {
     var wrap = document.createElement("div");
     wrap.className = "review-face";
     var imgwrap = document.createElement("div");
     imgwrap.className = "review-face-imgwrap";
+    imgwrap.setAttribute("role", "button");
+    imgwrap.setAttribute("tabindex", "0");
+    imgwrap.setAttribute("aria-label", "Zoom in on this face");
     var img = document.createElement("img");
     img.src = "/media/" + row.item_id + "/thumb?size=400";
-    var box = document.createElement("div");
-    box.className = "review-face-box";
+    var box = makeCornerBox();
     imgwrap.appendChild(img);
     imgwrap.appendChild(box);
     wrap.appendChild(imgwrap);
@@ -2355,12 +2843,22 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       if (!iw || !ih || !img.clientWidth) return;
       var sx = img.clientWidth / iw;
       var sy = img.clientHeight / ih;
-      box.style.left = (row.bbox[0] * sx) + "px";
-      box.style.top = (row.bbox[1] * sy) + "px";
-      box.style.width = ((row.bbox[2] - row.bbox[0]) * sx) + "px";
-      box.style.height = ((row.bbox[3] - row.bbox[1]) * sy) + "px";
+      var pb = paddedBox(row.bbox, iw, ih);
+      box.style.left = (pb[0] * sx) + "px";
+      box.style.top = (pb[1] * sy) + "px";
+      box.style.width = ((pb[2] - pb[0]) * sx) + "px";
+      box.style.height = ((pb[3] - pb[1]) * sy) + "px";
     }
     img.addEventListener("load", place);
+    function openZoom() { openFaceZoom(row); }
+    imgwrap.addEventListener("click", openZoom);
+    imgwrap.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); openZoom(); }
+    });
+    var zoomHint = document.createElement("div");
+    zoomHint.className = "review-face-zoom-hint";
+    zoomHint.textContent = "Tap photo to zoom in";
+    wrap.appendChild(zoomHint);
     var detach = document.createElement("button");
     detach.type = "button";
     detach.textContent = "Not this person";
@@ -2379,6 +2877,65 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     });
     wrap.appendChild(detach);
     return wrap;
+  }
+
+  /* ---- Face zoom: crop-and-enlarge the face region on a canvas so an
+     elderly user can see clearly who it is. Corner markers are redrawn
+     on the canvas so they still show in the zoomed view. ---- */
+  var faceZoomBackdrop = document.getElementById("face-zoom-backdrop");
+  var faceZoomClose = document.getElementById("face-zoom-close");
+  var faceZoomCanvas = document.getElementById("face-zoom-canvas");
+
+  function closeFaceZoom() { faceZoomBackdrop.classList.remove("show"); }
+  faceZoomClose.addEventListener("click", closeFaceZoom);
+  faceZoomBackdrop.addEventListener("click", function (ev) {
+    if (ev.target === faceZoomBackdrop) closeFaceZoom();
+  });
+
+  function openFaceZoom(row) {
+    var img = new Image();
+    img.onload = function () {
+      var iw = row.img_w || img.naturalWidth;
+      var ih = row.img_h || img.naturalHeight;
+      var pb = paddedBox(row.bbox, iw, ih);
+      var cropW = Math.max(1, pb[2] - pb[0]);
+      var cropH = Math.max(1, pb[3] - pb[1]);
+      // Enlarge the crop to a comfortably large canvas.
+      var targetW = Math.min(900, Math.max(400, cropW * 4));
+      var scale = targetW / cropW;
+      var targetH = cropH * scale;
+      faceZoomCanvas.width = targetW;
+      faceZoomCanvas.height = targetH;
+      var ctx = faceZoomCanvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(
+        img,
+        pb[0], pb[1], cropW, cropH,
+        0, 0, targetW, targetH
+      );
+      // Redraw the face's own corner markers, scaled into crop space.
+      var bx = (row.bbox[0] - pb[0]) * scale;
+      var by = (row.bbox[1] - pb[1]) * scale;
+      var bw = (row.bbox[2] - row.bbox[0]) * scale;
+      var bh = (row.bbox[3] - row.bbox[1]) * scale;
+      var cl = Math.min(bw, bh) * 0.22;
+      ctx.strokeStyle = "#b8bb26";
+      ctx.lineWidth = 5;
+      ctx.lineCap = "square";
+      function corner(x0, y0, dx, dy) {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0 + dy * cl);
+        ctx.lineTo(x0, y0);
+        ctx.lineTo(x0 + dx * cl, y0);
+        ctx.stroke();
+      }
+      corner(bx, by, 1, 1);
+      corner(bx + bw, by, -1, 1);
+      corner(bx, by + bh, 1, -1);
+      corner(bx + bw, by + bh, -1, -1);
+      faceZoomBackdrop.classList.add("show");
+    };
+    img.src = "/media/" + row.item_id + "/thumb?size=1200";
   }
 
   function openReview(person) {
@@ -3023,12 +3580,87 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
   }
 
+  /* ---- Onboarding walkthrough: a few large, plain-language cards shown
+     on first visit, with a "Got it" (Skip/Next through to the end) flow
+     and an always-available "Help / show me around" button to replay it.
+     Dependency-free; "seen" is remembered in localStorage. ---- */
+  var WALKTHROUGH_SEEN_KEY = "malmberg_walkthrough_seen";
+  var WALKTHROUGH_STEPS = [
+    "Welcome! This page has two parts. The top part with the orange " +
+      "border controls what is showing right now on your TV or photo " +
+      "frame.",
+    "The bottom part with the green border is your photo library -- " +
+      "where all your photos and videos are kept safe.",
+    "Tap a year button, or type a year, month, place, or a person's " +
+      "name in the box, to show those photos on the TV.",
+    "Tap a photo or a name anywhere in the library to see it, or to " +
+      "show it on the TV.",
+    "In the People section, tap a person's picture to see their photos " +
+      "and check the faces. Use the big \"Name this person\" button to " +
+      "give them a name.",
+    "You can always come back to this tour later by pressing " +
+      "\"Help / show me around\" at the top of the page.",
+  ];
+  var walkthroughBackdrop = document.getElementById("walkthrough-backdrop");
+  var walkthroughStepText = document.getElementById("walkthrough-step-text");
+  var walkthroughDots = document.getElementById("walkthrough-dots");
+  var walkthroughSkip = document.getElementById("walkthrough-skip");
+  var walkthroughBack = document.getElementById("walkthrough-back");
+  var walkthroughNext = document.getElementById("walkthrough-next");
+  var helpBtn = document.getElementById("help-btn");
+  var walkthroughStep = 0;
+
+  function renderWalkthroughStep() {
+    walkthroughStepText.textContent = WALKTHROUGH_STEPS[walkthroughStep];
+    walkthroughDots.innerHTML = "";
+    WALKTHROUGH_STEPS.forEach(function (_step, i) {
+      var dot = document.createElement("span");
+      if (i === walkthroughStep) dot.className = "on";
+      walkthroughDots.appendChild(dot);
+    });
+    walkthroughBack.style.visibility = walkthroughStep === 0 ? "hidden" : "visible";
+    var isLast = walkthroughStep === WALKTHROUGH_STEPS.length - 1;
+    walkthroughNext.textContent = isLast ? "Got it" : "Next";
+  }
+
+  function openWalkthrough() {
+    walkthroughStep = 0;
+    renderWalkthroughStep();
+    walkthroughBackdrop.classList.add("show");
+  }
+  function closeWalkthrough() {
+    walkthroughBackdrop.classList.remove("show");
+    try {
+      window.localStorage.setItem(WALKTHROUGH_SEEN_KEY, "1");
+    } catch (e) { /* ignore */ }
+  }
+  walkthroughSkip.addEventListener("click", closeWalkthrough);
+  walkthroughBack.addEventListener("click", function () {
+    if (walkthroughStep > 0) { walkthroughStep -= 1; renderWalkthroughStep(); }
+  });
+  walkthroughNext.addEventListener("click", function () {
+    if (walkthroughStep < WALKTHROUGH_STEPS.length - 1) {
+      walkthroughStep += 1;
+      renderWalkthroughStep();
+    } else {
+      closeWalkthrough();
+    }
+  });
+  helpBtn.addEventListener("click", openWalkthrough);
+
+  var walkthroughAlreadySeen = false;
+  try {
+    walkthroughAlreadySeen = !!window.localStorage.getItem(WALKTHROUGH_SEEN_KEY);
+  } catch (e) { /* ignore */ }
+  if (!walkthroughAlreadySeen) openWalkthrough();
+
   loadStats();
   refreshStatus();
   loadGrid();
   if (MALMBERG_ROLE !== "display") {
     loadPlaylists();
     loadYearFilter();
+    loadMonthFilter();
   }
   setInterval(refreshStatus, 5000);
 })();

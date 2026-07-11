@@ -118,7 +118,7 @@ schema change never requires a manual re-ingest of existing files.
 | `page` | int | `1` | >= 1 | Page number (1-based) |
 | `page_size` | int | `50` | 1--500 | Items per page |
 | `sort` | str | `"id"` | `"id"` \| `"recent"` | `"recent"` orders newest first by `meta.taken_at`, falling back to `meta.ingest_at` |
-| `q` | str | none | -- | Filters to items whose `filename` contains *q* (case-insensitive), whose `meta.taken_at` year equals *q* when *q* is a 4-digit year, or whose `meta.place` contains *q* (case-insensitive) |
+| `q` | str | none | -- | Filters to items whose `filename` contains *q* (case-insensitive), whose `meta.taken_at` year equals *q* when *q* is a 4-digit year, whose `meta.taken_at` year and month equal *q* when *q* is `YYYY-MM`, whose `meta.place` contains *q* (case-insensitive), or (for `/media`) a detected person's name contains *q* |
 
 **Response: `MediaPage`**
 
