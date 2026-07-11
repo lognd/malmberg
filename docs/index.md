@@ -9,11 +9,11 @@ over UDP; no cloud account, no subscription, and no internet connection is requi
 | | |
 |---|---|
 | **New here?** | [Getting started](getting-started.md) |
-| **What to buy** | [Server hardware](hardware/server.md) · [Display hardware](hardware/display.md) · [Board profiles](hardware/profiles.md) |
-| **Running it** | [Provisioning](operations/provisioning.md) · [Troubleshooting](operations/troubleshooting.md) · [Upgrading](operations/upgrading.md) |
-| **Configuring** | [Server config](software/configuration.md#server-configuration) · [Display config](software/configuration.md#display-configuration) |
+| **What to buy** | [Server hardware](hardware/server.md) / [Display hardware](hardware/display.md) / [Board profiles](hardware/profiles.md) |
+| **Running it** | [Provisioning](operations/provisioning.md) / [Server build (ZFS mirror)](operations/server-build.md) / [Troubleshooting](operations/troubleshooting.md) / [Upgrading](operations/upgrading.md) |
+| **Configuring** | [Server config](software/configuration.md#server-configuration) / [Display config](software/configuration.md#display-configuration) |
 | **API** | [HTTP API reference](software/api-reference.md) |
-| **Development** | [Modules](software/modules.md) · [Testing](software/testing.md) · [Contributing](software/contributing.md) |
+| **Development** | [Modules](software/modules.md) / [Testing](software/testing.md) / [Contributing](software/contributing.md) |
 | **Design** | [Design docs](design/README.md) |
 
 ## Tested hardware

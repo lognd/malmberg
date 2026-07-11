@@ -7,6 +7,12 @@ see [Getting started](../getting-started.md).
 
 ## Server provisioning (Ubuntu 22.04+)
 
+> **Building a mirrored (redundant) server?** For a full **OS + boot + data**
+> mirror across two disks -- including network setup and the ZFS-on-root install --
+> follow the end-to-end runbook in [server-build.md](server-build.md). This page
+> covers the single-machine software provisioning that `setup` performs (and which
+> the runbook also uses in its final phase).
+
 ### Prerequisites
 
 - Ubuntu 22.04 LTS or later (other distros work but are untested)
@@ -40,18 +46,27 @@ at `/fs` instead and warns that backups require ZFS.
 
 ### 2. Install and provision
 
-```bash
-git clone https://github.com/lognd/malmberg
-cd malmberg
-uv sync
+Clone into `/opt/malmberg` -- **not** a home directory. The service runs as the
+`malmberg` user, which cannot traverse a `750` home dir, so a home-directory
+checkout fails at start with `status=203/EXEC Permission denied`.
 
-sudo uv run python -m malmberg_server setup
+```bash
+sudo git clone https://github.com/lognd/malmberg /opt/malmberg
+cd /opt/malmberg
+sudo uv sync
+sudo chown -R malmberg:malmberg /opt/malmberg
+
+# Make uv available to root and the auto-updater:
+sudo cp "$(command -v uv)" /usr/local/bin/uv
+
+sudo /opt/malmberg/.venv/bin/python -m malmberg_server setup
 ```
 
 The script is idempotent: it is safe to re-run after a partial install or upgrade.
 Re-running skips steps that are already complete (user exists, dataset exists,
 cert present, cron jobs tagged).
 
+<a id="what-the-script-does"></a>
 **What the script does, in order:**
 
 1. Validates the environment (platform, Python version, required commands).
@@ -60,27 +75,47 @@ cert present, cron jobs tagged).
 3. Creates system user `malmberg` with no login shell (`useradd --system`).
 4. Creates `/fs` (or the `--fs-root` path) owned by `malmberg:malmberg`, mode 750,
    with subdirectories `media/`, `uploads/`, `cloud/`, `.trash/`, `logs/`.
-5. Creates ZFS dataset `tank/malmberg` and grants `malmberg` snapshot permissions.
-   Skips gracefully if the dataset already exists or ZFS is unavailable.
-6. Chowns `/etc/malmberg/` to the `malmberg` user.
-7. Generates a self-signed TLS certificate pair at `/etc/malmberg/tls/`
+5. Creates ZFS dataset `tank/malmberg`. Skips gracefully if the dataset already
+   exists or ZFS is unavailable. (If the `tank` pool does not exist, it warns with
+   the `zpool create` command to run first.)
+6. Grants the `malmberg` user `snapshot,destroy,mount,hold` on `tank/malmberg`.
+   Runs on every invocation, even when the dataset already existed.
+7. Chowns `/etc/malmberg/` to the `malmberg` user.
+8. Generates a self-signed TLS certificate pair at `/etc/malmberg/tls/`
    (4096-bit RSA, 10-year validity). Skips if the cert already exists.
-8. Writes and enables `malmberg-server.service`.
-9. Installs two idempotent cron jobs for the `malmberg` user:
-   - **Trash purge** (03:15 daily): `find /fs/.trash -mtime +30 -delete`
-   - **ZFS backup** (02:00 daily): triggers a ZFS snapshot via the backup module
-   Each job is identified by a comment tag; re-running setup never duplicates them.
-10. Generates a 6-digit pairing PIN and writes it to `/etc/malmberg/pairing-pin.txt`.
+9. Writes and enables `malmberg-server.service`.
+10. Installs two idempotent cron jobs for the `malmberg` user:
+    - **Trash purge** (03:15 daily): `find /fs/.trash -mtime +30 -delete`
+    - **ZFS backup** (02:00 daily): triggers a ZFS snapshot via the backup module
+    Each job is identified by a comment tag; re-running setup never duplicates them.
+11. **Mirror hardening** (skip with `--no-hardening`):
+    - **ARC cap** -- writes `/etc/modprobe.d/zfs.conf` limiting `zfs_arc_max` to
+      ~half of RAM, and applies it live.
+    - **Monthly scrubs** -- enables `zfs-scrub-monthly@<pool>.timer` for every
+      imported pool.
+    - **EFI mirror** -- on a mirrored pool, installs `malmberg-sync-esp.timer`
+      (daily) that copies `/boot/efi` to the ESP of every other pool disk, so any
+      disk can boot alone. Runs one sync immediately. Skips on single-disk setups.
+12. **Unattended GitHub updates** (skip with `--no-auto-update`): installs
+    `malmberg-update.timer` that pulls `origin/<branch>` and redeploys on change.
+    See [upgrading.md](upgrading.md#unattended-github-updates).
+13. Generates a 6-digit pairing PIN and writes it to `/etc/malmberg/pairing-pin.txt`.
     If the file already exists with a valid PIN it is preserved.
 
 **CLI options:**
 
 ```bash
-sudo uv run python -m malmberg_server setup --help
+sudo /opt/malmberg/.venv/bin/python -m malmberg_server setup --help
 
-  --fs-root DIR    Media filesystem root (default: /fs)
-  --dry-run        Print what would be done without making changes
-  --no-enable      Write the systemd unit but do not enable or start the service
+  --fs-root DIR         Media filesystem root (default: /fs)
+  --dry-run             Print what would be done without making changes
+  --no-enable           Write the systemd unit but do not enable/start the service
+  --no-hardening        Skip ARC cap, monthly scrubs, and EFI mirror
+  --no-auto-update      Do not install the GitHub auto-update timer
+  --repo-dir DIR        Checkout the auto-updater pulls into
+                        (default: this checkout, else /opt/malmberg)
+  --branch NAME         Git branch the auto-updater tracks (default: main)
+  --update-interval MIN Minutes between GitHub update checks (default: 10)
 ```
 
 ### 3. Verify
@@ -284,4 +319,9 @@ acting:
 | TLS certificate | Checks for both `.crt` and `.key`; skips if both present |
 | Systemd unit | Always overwrites (picks up new `ExecStart` path after `uv` upgrades) |
 | Cron jobs | Comment-tag check (`# MALMBERG_TRASH_PURGE`, `# MALMBERG_ZFS_BACKUP`); skips if tag already in crontab |
+| ZFS permissions | `zfs allow` is applied every run (idempotent) |
+| ARC cap | Rewrites `zfs.conf` only when the value changes |
+| Scrubs / timers | `systemctl enable --now` is idempotent |
+| EFI mirror | Overwrites the managed script/units; skips entirely on non-mirror pools |
+| Auto-update | Overwrites the managed script/units; `enable --now` is idempotent |
 | Pairing PIN | Preserves existing valid PIN; only generates a new one if absent or malformed |

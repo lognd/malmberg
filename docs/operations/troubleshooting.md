@@ -176,16 +176,114 @@ Adjust values for your specific board. See
 ## ZFS snapshot fails with `permission denied`
 
 The server process runs as the `malmberg` user, which needs explicit ZFS permissions
-on the dataset:
+on the dataset. `setup` grants these automatically on every run, but to do it by
+hand:
 
 ```bash
-sudo zfs allow malmberg snapshot,destroy,send tank/malmberg
+sudo zfs allow malmberg snapshot,destroy,mount,hold tank/malmberg
 ```
 
 Verify the permissions are in place:
 
 ```bash
 zfs allow tank/malmberg
+```
+
+---
+
+## `cannot create 'tank/malmberg': no such pool 'tank'`
+
+`setup` creates the *dataset* `tank/malmberg`, but it never creates the *pool* --
+that means formatting disks, which must be a deliberate manual step. The error
+means the `tank` pool does not exist yet.
+
+`tank` is the pool; `tank/malmberg` is a dataset inside it. Pools are made with
+`zpool` (not `zfs`). Find your disks and create the pool first:
+
+```bash
+sudo zpool list                                   # confirm 'tank' is absent
+lsblk -dpno NAME,SIZE,FSTYPE,MODEL                # find the data disks
+ls -l /dev/disk/by-id/ | grep -v part             # stable names to use
+
+# Two-disk mirror (recommended). USE by-id NAMES, not /dev/sdX:
+sudo zpool create -o ashift=12 tank mirror \
+  /dev/disk/by-id/<diskA> /dev/disk/by-id/<diskB>
+```
+
+Then re-run `setup` (idempotent) -- it finds the pool and creates the dataset.
+For a full mirrored **OS + data** build, follow [server-build.md](server-build.md)
+instead.
+
+> `zpool create` erases the target disks. Double-check you are not naming the OS
+> disk (the one with the mounted `/`, `/boot`, or `/boot/efi` partitions).
+
+---
+
+## A mirror disk failed, or a pool shows DEGRADED
+
+`zpool status` shows a member as `FAULTED`, `DEGRADED`, `UNAVAIL`, or `OFFLINE`.
+The pool keeps serving data from the surviving disk; replace the bad one:
+
+```bash
+zpool status -v                                   # identify the failed by-id device
+# Physically swap the disk, then partition the replacement like the survivor:
+GOOD=/dev/disk/by-id/<surviving-disk>
+NEW=/dev/disk/by-id/<replacement-disk>
+sudo sgdisk --replicate="$NEW" "$GOOD"
+sudo sgdisk --randomize-guids "$NEW"
+
+# Replace in both pools (partitions 2 = bpool, 3 = tank on the standard layout):
+sudo zpool replace bpool <old-id-part2> "${NEW}-part2"
+sudo zpool replace tank  <old-id-part3> "${NEW}-part3"
+
+# Restore the bootloader onto the new disk so it can boot alone:
+sudo mkfs.vfat -F32 -s1 -n EFI "${NEW}-part1"
+sudo /usr/local/sbin/malmberg-sync-esp.sh         # installed by setup
+sudo efibootmgr -c -d "$NEW" -p 1 -L "Ubuntu-ZFS-new" -l '\EFI\ubuntu-zfs\shimx64.efi'
+
+sudo zpool status                                 # wait for resilver, 0 errors
+```
+
+To prove redundancy without a real failure, see the drive-pull test in
+[server-build.md](server-build.md#verify-the-mirror-actually-protects-data).
+
+---
+
+## Machine will not boot / drops to `grub rescue` after a disk change
+
+Each disk in the mirror carries its own EFI System Partition and UEFI boot entry
+(`Ubuntu` and `Ubuntu-ZFS-sda`). `setup` installs a daily timer
+(`malmberg-sync-esp.timer`) that mirrors `/boot/efi` to the other disk so both stay
+bootable.
+
+- At the firmware boot menu (usually **F12**), pick the entry for the disk that is
+  still healthy.
+- List/repair entries from a booted system:
+  ```bash
+  efibootmgr                       # view entries and BootOrder
+  sudo /usr/local/sbin/malmberg-sync-esp.sh    # re-mirror the ESP now
+  ```
+- If GRUB itself is damaged on one disk, reinstall it while booted from the good
+  disk (ESP mounted at `/boot/efi`):
+  ```bash
+  sudo grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --bootloader-id=ubuntu-zfs --recheck
+  sudo update-grub
+  ```
+
+---
+
+## Server is sluggish / high memory pressure with ZFS
+
+The ZFS ARC (adaptive cache) defaults to half of RAM but can still crowd services
+on a small box. `setup` writes an ARC cap to `/etc/modprobe.d/zfs.conf`
+(`zfs_arc_max`, ~half of RAM). To change it:
+
+```bash
+cat /etc/modprobe.d/zfs.conf
+echo 3221225472 | sudo tee /sys/module/zfs/parameters/zfs_arc_max   # live, 3 GiB
+# Persist by editing zfs.conf and rebuilding the initramfs:
+sudo update-initramfs -u
 ```
 
 ---
@@ -200,6 +298,86 @@ display appears stuck but not paused, check that:
 - The server is still reachable if using `ServerProducer`
 - The cache directory is not full (the download in `_download()` fails silently and
   skips the item if disk is full)
+
+---
+
+## `apt` fails: `Temporary failure resolving 'archive.ubuntu.com'`
+
+DNS is not working. Determine whether it is DNS-only or no internet at all:
+
+```bash
+ping -c2 8.8.8.8        # raw IP works => routing OK, DNS broken
+ping -c2 google.com     # name fails    => confirms DNS
+ip route | grep default # is there a default gateway at all?
+```
+
+- **IP works, name fails (DNS only):** quick fix
+  `echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf` (temporary). Permanent
+  fix: add `nameservers: {addresses: [1.1.1.1, 8.8.8.8]}` under the interface in
+  `/etc/netplan/*.yaml`, then `sudo netplan apply`.
+- **No default route:** the static config is missing a gateway; add a
+  `routes: [{to: default, via: <router-ip>}]` block. See
+  [server-build.md](server-build.md#dns--gateway-netplan).
+
+### netplan: `default route consistency` / `gateway4 has been deprecated`
+
+Two netplan files both define networking for the interface (commonly a leftover
+`50-cloud-init.yaml` alongside `00-installer-config.yaml`). Keep exactly one:
+
+```bash
+ls -la /etc/netplan/
+grep -rn "gateway4\|routes\|addresses" /etc/netplan/
+sudo mv /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
+sudo netplan generate && sudo netplan apply
+```
+
+Use the modern `routes:` syntax, not the deprecated `gateway4:`.
+
+---
+
+## Cannot SSH to the server: `nmap` shows `22/tcp closed`
+
+`closed` (host replies, nothing listening) is different from `filtered` (firewall
+drops the packet):
+
+- **`closed`** -- the SSH daemon is not running. Opening ports/adding a key does not
+  start it:
+  ```bash
+  sudo apt install -y openssh-server
+  sudo systemctl enable --now ssh
+  sudo ss -tlnp | grep :22        # confirm sshd is listening
+  ```
+- **`filtered`** -- a firewall/port-forward is blocking it. Check `ufw`/router rules.
+
+If SSH connects but the key is rejected, confirm the *exact* public key is in the
+right file for the login user (`/root/.ssh/authorized_keys` for root; dir `700`,
+file `600`, one unbroken line), and that `PermitRootLogin` allows key auth. A
+hand-typed key with one wrong character fails silently -- verify with `ssh -v`.
+
+---
+
+## Server auto-start and power behavior
+
+The `malmberg-server` service is enabled (`systemctl is-enabled malmberg-server`),
+so it starts at boot with no login required, and `/fs` auto-mounts via
+`zfs-import-cache`/`zfs-mount`. If it does *not* come up on its own:
+
+```bash
+systemctl is-enabled malmberg-server zfs-import-cache zfs-mount   # all "enabled"
+sudo systemctl enable malmberg-server                            # if not
+journalctl -u malmberg-server -b                                 # boot-time errors
+```
+
+To have the machine **power on automatically after a mains outage**, enable
+"Restore on AC Power Loss" -> Power On in the UEFI/BIOS setup -- this is a firmware
+setting and cannot be configured from the OS.
+
+For a headless server you can drop the desktop to free RAM (auto-start and SSH are
+unaffected):
+
+```bash
+sudo systemctl set-default multi-user.target
+```
 
 ---
 

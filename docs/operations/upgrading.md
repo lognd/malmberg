@@ -1,6 +1,36 @@
 # Upgrading
 
-## Upgrading the software
+## Unattended GitHub updates
+
+`setup` installs `malmberg-update.timer`, which checks GitHub on an interval
+(default every 10 minutes) and redeploys automatically when the tracked branch
+advances. This is the intended way to update a production server: **push to `main`
+and the server updates itself** -- no SSH required.
+
+On each check, `/usr/local/sbin/malmberg-update.sh`:
+
+1. `git fetch`es `origin/<branch>` in the deploy checkout (`/opt/malmberg`).
+2. If the remote is unchanged, exits immediately.
+3. Otherwise `git reset --hard origin/<branch>`, runs `uv sync --frozen`, re-chowns
+   the tree to `malmberg`, and restarts `malmberg-server`.
+
+```bash
+systemctl list-timers malmberg-update.timer     # when it next runs
+sudo systemctl start malmberg-update.service    # force a check now
+journalctl -t malmberg-update -n 20             # what it did
+```
+
+> Because the updater does `git reset --hard`, the deploy checkout is a read-only
+> mirror of GitHub. **Never hand-edit files in `/opt/malmberg`** -- local changes
+> are discarded on the next update. Make changes upstream and push.
+
+Configure or disable it via `setup` flags (`--branch`, `--update-interval`,
+`--repo-dir`, `--no-auto-update`); see
+[provisioning.md](provisioning.md#what-the-script-does).
+
+---
+
+## Upgrading the software manually
 
 Pull the latest changes and re-sync dependencies:
 
@@ -116,12 +146,12 @@ permissions are preserved:
 
 ```bash
 zfs allow tank/malmberg
-# should include: snapshot, destroy, send for user malmberg
+# should include: snapshot, destroy, mount, hold for user malmberg
 ```
 
 If the permissions were lost (this can happen on some ZFS package upgrades), restore
-them:
+them -- or just re-run `setup`, which reapplies them every time:
 
 ```bash
-sudo zfs allow malmberg snapshot,destroy,send tank/malmberg
+sudo zfs allow malmberg snapshot,destroy,mount,hold tank/malmberg
 ```
