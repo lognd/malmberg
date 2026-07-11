@@ -543,6 +543,111 @@ non-empty filter is required. The dashboard's year/month quick-buttons post
 
 ---
 
+### `GET /cloud/status`
+
+Per-provider cloud-sync diagnostics.
+
+**Response:** `CloudStatus`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `providers` | list[ProviderStatus] | One block per registered provider |
+
+Each `ProviderStatus`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | str | Provider machine name (`icloud`, `google_photos`) |
+| `enabled` | bool | Whether the provider's enable flag is set in config |
+| `configured` | bool | Whether the optional dependency and credentials are present |
+| `tracked` | int | Remote items tracked in the sync state |
+| `verified` | int | Tracked items whose local copy matched by SHA-256 |
+| `deleted_from_cloud` | int | Tracked items already deleted from the cloud |
+| `last_sync_at` | str \| null | ISO-8601 timestamp of the last sync, or null |
+| `last_error` | str \| null | Last sync error text, or null |
+
+---
+
+### `POST /cloud/sync`
+
+Schedule an immediate sync (runs as a background task; returns at once).
+
+**Request body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | str \| null | `null` | Limit to one provider by name; null syncs all registered providers |
+
+**Response:** `CloudSyncAck`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | str | `"started"`, `"no_providers"`, or `"unknown_provider"` |
+| `providers` | list[str] | Provider names the sync was started for |
+
+---
+
+### `GET /cloud/deletable`
+
+Dry-run list of remote items verified (re-hashed from disk right now) as safe
+to delete. Deletes nothing.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | str | Provider name (required) |
+
+**Response:** `DeletablePage`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | str | Provider name |
+| `items` | list[DeletableEntry] | Items verified safe to delete |
+| `total` | int | Number of deletable items |
+
+**Errors:** `404` if the provider is unknown.
+
+---
+
+### `POST /cloud/delete`
+
+Delete cloud items that re-verify against their local copy. Guarded: refuses
+without an explicit `confirm`, deletes only verified items, and caps the number
+deleted per call. Every deletion is written to `fs_root/logs/cloud-deletions.log`.
+
+**Request body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | str | required | Provider name |
+| `confirm` | bool | `false` | Must be `true`; a `false` value is rejected with `400` |
+| `cap` | int \| null | `null` | Per-run deletion cap; null uses `cloud_delete_cap` (effective cap is `min(cap, cloud_delete_cap)`) |
+
+**Response:** `DeleteReport`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | str | Provider name |
+| `dry_run` | bool | Always `false` for this endpoint (confirm is required) |
+| `candidates` | int | Items verified deletable at the start of the run |
+| `deleted` | int | Items actually deleted from the cloud |
+| `skipped_unverified` | int | Candidates that failed re-verification at delete time |
+| `failed` | int | Delete attempts that errored (e.g. provider cannot delete) |
+| `capped` | bool | Whether the run stopped at the cap |
+| `errors` | list[str] | Per-item error messages |
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `confirm` not `true`, or the provider cannot delete (`Unsupported`) |
+| `404` | Unknown provider |
+| `502` | Provider auth/network error |
+| `500` | Audit log or sync-state write failure |
+
+---
+
 ## Data models
 
 ### `MediaItem`
@@ -839,6 +944,13 @@ below responds `503`.
 | `POST /media/{id}/restore` | `POST /media/{id}/restore` |
 | `POST /media/bulk-delete` | `POST /media/bulk-delete` |
 | `POST /control/restart-server` | `POST /admin/restart` (restarts the paired server itself) |
+| `GET /cloud/status` | `GET /cloud/status` (read-only cloud-sync diagnostics) |
+| `GET /cloud/deletable` | `GET /cloud/deletable` (query params passed through; read-only dry run) |
+
+Only the two read-only cloud routes are proxied. `POST /cloud/sync` and
+`POST /cloud/delete` are server-only writes and are intentionally **not**
+proxied; the display dashboard hides the "Sync now" and "Clean up cloud"
+buttons in the `role="display"` render.
 
 **Errors:**
 

@@ -46,6 +46,7 @@ async def handle_upload(
     total = 0
 
     try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
         with open(staging, "wb") as dest:
             while True:
                 chunk = await file.read(65536)
@@ -61,8 +62,50 @@ async def handle_upload(
     except OSError:
         return Err(IngestError.IOError)
 
-    digest = sha.hexdigest()
+    return _finalize_staged(staging, file.filename, sha.hexdigest(), store, media_root)
 
+
+def ingest_bytes(
+    data: bytes,
+    filename: str,
+    store: MediaStore,
+    media_root: Path,
+    upload_root: Path,
+    max_bytes: int,
+) -> Result[MediaItem, IngestError]:
+    """Ingest an in-memory blob through the same pipeline as handle_upload.
+
+    For callers that already hold the full file (cloud sync). Enforces
+    *max_bytes* (FileTooLarge), writes *data* to ``upload_root/filename``
+    (OSError -> IOError), then defers to the shared dedup/EXIF/move/index tail.
+    """
+    if len(data) > max_bytes:
+        return Err(IngestError.FileTooLarge)
+
+    staging = upload_root / filename
+    try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        with open(staging, "wb") as dest:
+            dest.write(data)
+    except OSError:
+        return Err(IngestError.IOError)
+
+    digest = hashlib.sha256(data).hexdigest()
+    return _finalize_staged(staging, filename, digest, store, media_root)
+
+
+def _finalize_staged(
+    staging: Path,
+    filename: str,
+    digest: str,
+    store: MediaStore,
+    media_root: Path,
+) -> Result[MediaItem, IngestError]:
+    """Dedup-check, EXIF-extract, move staging into media_root/YYYY/MM/DD/, index.
+
+    Shared tail of handle_upload and ingest_bytes. Unlinks *staging* on every
+    error path (duplicate, rename failure).
+    """
     if store.sha256_exists(digest):
         staging.unlink(missing_ok=True)
         return Err(IngestError.DuplicateFile)
@@ -73,7 +116,7 @@ async def handle_upload(
     else:
         _log.warning(
             "EXIF extraction failed for %s (%s); using minimal metadata",
-            file.filename,
+            filename,
             exif_result.danger_err,
         )
         from malmberg_core.models import MediaMetadata
@@ -83,7 +126,7 @@ async def handle_upload(
     meta = meta.model_copy(update={"sha256": digest})
 
     now = datetime.now(timezone.utc)
-    rel_path = f"{now.year}/{now.month:02d}/{now.day:02d}/{file.filename}"
+    rel_path = f"{now.year}/{now.month:02d}/{now.day:02d}/{filename}"
     final = media_root / rel_path
     final.parent.mkdir(parents=True, exist_ok=True)
 
@@ -93,15 +136,13 @@ async def handle_upload(
         staging.unlink(missing_ok=True)
         return Err(IngestError.IOError)
 
-    kind: str = (
-        "video" if Path(file.filename).suffix.lower() in _VIDEO_EXTS else "image"
-    )
+    kind: str = "video" if Path(filename).suffix.lower() in _VIDEO_EXTS else "image"
     item = MediaItem(
         kind=kind,  # type: ignore[arg-type]
-        filename=file.filename,
+        filename=filename,
         server_path=rel_path,
         meta=meta,
     )
     store.add(item)
-    _log.info("Ingested %s -> %s (sha256 %s)", file.filename, rel_path, digest[:12])
+    _log.info("Ingested %s -> %s (sha256 %s)", filename, rel_path, digest[:12])
     return Ok(item)

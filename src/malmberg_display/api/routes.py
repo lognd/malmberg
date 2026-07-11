@@ -383,6 +383,18 @@ def build_app(
         """Proxy: place-name autocomplete suggestions from the paired server."""
         return await _proxy_json("GET", "/places", params=dict(request.query_params))
 
+    @app.get("/cloud/status")
+    async def proxy_cloud_status() -> object:
+        """Proxy (read-only): cloud-sync per-provider diagnostics from the server."""
+        return await _proxy_json("GET", "/cloud/status")
+
+    @app.get("/cloud/deletable")
+    async def proxy_cloud_deletable(request: Request) -> object:
+        """Proxy (read-only): dry-run list of cloud items verified safe to delete."""
+        return await _proxy_json(
+            "GET", "/cloud/deletable", params=dict(request.query_params)
+        )
+
     @app.get("/people")
     async def proxy_people(request: Request) -> object:
         """Proxy: detected people (id, name, count, sample thumbnail)."""

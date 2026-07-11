@@ -42,12 +42,66 @@ class ServerConfig(BaseModel):
     'display'.
     """
 
+    cloud_icloud_enabled: bool = False
+    """Enable the iCloud cloud-sync provider (see malmberg_server.cloud)."""
+    cloud_icloud_username: Optional[str] = None
+    """Apple ID for iCloud sync; the password is read from an env var, never here."""
+    cloud_icloud_session_dir: Optional[Path] = None
+    """Cached pyicloud session dir; None -> fs_root/.cloud/icloud-session/."""
+    cloud_google_photos_enabled: bool = False
+    """Enable the Google Photos cloud-sync provider (app-uploaded items only)."""
+    cloud_google_client_secrets: Optional[Path] = None
+    """OAuth client-secret file; None -> fs_root/.cloud/google-client-secret.json."""
+    cloud_google_token: Optional[Path] = None
+    """OAuth token file; None -> fs_root/.cloud/google-photos-token.json."""
+    cloud_sync_interval_s: int = 3600
+    """Seconds between background auto-sync sweeps."""
+    cloud_delete_cap: int = 200
+    """Hard ceiling on cloud deletions per delete_verified run."""
+
     @field_validator("max_upload_mb")
     @classmethod
     def _upload_positive(cls, v: int) -> int:
         if v < 1:
             raise ValueError("max_upload_mb must be >= 1")
         return v
+
+    @field_validator("cloud_sync_interval_s")
+    @classmethod
+    def _interval_min(cls, v: int) -> int:
+        if v < 60:
+            raise ValueError("cloud_sync_interval_s must be >= 60")
+        return v
+
+    @field_validator("cloud_delete_cap")
+    @classmethod
+    def _cap_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("cloud_delete_cap must be >= 1")
+        return v
+
+    def cloud_icloud_session_path(self) -> Path:
+        """Resolve the iCloud session dir, defaulting under fs_root/.cloud/."""
+        return self.cloud_icloud_session_dir or (
+            self.fs_root / ".cloud" / "icloud-session"
+        )
+
+    def cloud_google_client_secrets_path(self) -> Path:
+        """Resolve the Google client-secret path, defaulting under fs_root/.cloud/."""
+        return self.cloud_google_client_secrets or (
+            self.fs_root / ".cloud" / "google-client-secret.json"
+        )
+
+    def cloud_google_token_path(self) -> Path:
+        """Resolve the Google token path, defaulting under fs_root/.cloud/."""
+        return self.cloud_google_token or (
+            self.fs_root / ".cloud" / "google-photos-token.json"
+        )
+
+    @staticmethod
+    def _env_bool(v: str) -> bool:
+        """Parse a boolean env var ('1'/'true'/'yes', case-insensitive)."""
+        return v.strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _args_to_dict(args: argparse.Namespace) -> dict[str, Any]:
@@ -83,6 +137,22 @@ class ServerConfig(BaseModel):
                     displays[name.strip()] = url.strip()
             if displays:
                 result["displays"] = displays
+        if v := os.environ.get("MALMBERG_CLOUD_ICLOUD_ENABLED"):
+            result["cloud_icloud_enabled"] = ServerConfig._env_bool(v)
+        if v := os.environ.get("MALMBERG_CLOUD_ICLOUD_USERNAME"):
+            result["cloud_icloud_username"] = v
+        if v := os.environ.get("MALMBERG_CLOUD_ICLOUD_SESSION_DIR"):
+            result["cloud_icloud_session_dir"] = Path(v)
+        if v := os.environ.get("MALMBERG_CLOUD_GOOGLE_PHOTOS_ENABLED"):
+            result["cloud_google_photos_enabled"] = ServerConfig._env_bool(v)
+        if v := os.environ.get("MALMBERG_CLOUD_GOOGLE_CLIENT_SECRETS"):
+            result["cloud_google_client_secrets"] = Path(v)
+        if v := os.environ.get("MALMBERG_CLOUD_GOOGLE_TOKEN"):
+            result["cloud_google_token"] = Path(v)
+        if v := os.environ.get("MALMBERG_CLOUD_SYNC_INTERVAL_S"):
+            result["cloud_sync_interval_s"] = int(v)
+        if v := os.environ.get("MALMBERG_CLOUD_DELETE_CAP"):
+            result["cloud_delete_cap"] = int(v)
         return result
 
     @classmethod

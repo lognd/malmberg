@@ -58,6 +58,6 @@ class ServerApp:
     def _ensure_dirs(self) -> None:
         """Create the media filesystem layout if it doesn't exist."""
         root = self._cfg.fs_root
-        for subdir in ("media", "uploads", "cloud", ".trash", "logs"):
+        for subdir in ("media", "uploads", "cloud", ".trash", "logs", ".cloud"):
             (root / subdir).mkdir(parents=True, exist_ok=True)
         _log.info("Storage root ready: %s", root)

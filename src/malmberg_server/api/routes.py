@@ -21,6 +21,24 @@ from malmberg_core.models import HidePolicy, MediaItem, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
+from malmberg_server.cloud.base import CloudError, CloudProvider
+from malmberg_server.cloud.google_photos import GooglePhotosProvider
+from malmberg_server.cloud.icloud import ICloudProvider
+from malmberg_server.cloud.sync import (
+    CloudStatus,
+    CloudSyncAck,
+    CloudSyncEngine,
+    CloudSyncRequest,
+    cloud_state_path,
+    run_cloud_sync_worker,
+)
+from malmberg_server.cloud.verify_and_delete import (
+    CloudDeleteRequest,
+    DeletablePage,
+    DeleteReport,
+    delete_verified,
+    dry_run_deletable,
+)
 from malmberg_server.faces.faces_index import FaceStore
 from malmberg_server.faces.people import PersonStore
 from malmberg_server.faces.worker import run_face_worker, sync_person_ids
@@ -212,6 +230,40 @@ def build_app(
         if _store.save_to_disk(_index_path()).is_err:
             _log.error("Failed to persist media index after face mutation")
 
+    def _build_providers() -> list[CloudProvider]:
+        """Construct the cloud providers whose enable flag is set in config.
+
+        Providers self-degrade (is_configured() False) when their optional
+        dependency or credentials are absent, so construction never raises.
+        """
+        providers: list[CloudProvider] = []
+        if cfg.cloud_icloud_enabled:
+            providers.append(
+                ICloudProvider(
+                    cfg.cloud_icloud_username,
+                    cfg.cloud_icloud_session_path(),
+                )
+            )
+        if cfg.cloud_google_photos_enabled:
+            providers.append(
+                GooglePhotosProvider(
+                    cfg.cloud_google_client_secrets_path(),
+                    cfg.cloud_google_token_path(),
+                )
+            )
+        return providers
+
+    _cloud_engine = CloudSyncEngine(
+        cfg,
+        _store,
+        _build_providers(),
+        media_root=_media_root(),
+        upload_root=cfg.fs_root / ".upload" / "cloud",
+        state_path=cloud_state_path(cfg.fs_root),
+        index_path=_index_path(),
+    )
+    _cloud_engine.load_state()
+
     @app.on_event("startup")
     async def _start_face_worker() -> None:
         """Kick off the background face-detection walker (see faces.worker).
@@ -231,6 +283,84 @@ def build_app(
                 _faces_path(),
             )
         )
+
+    @app.on_event("startup")
+    async def _start_cloud_sync_worker() -> None:
+        """Kick off the periodic cloud pull-sync (see cloud.sync).
+
+        Pull-only: this task never deletes remote items; deletion happens
+        exclusively through the explicit POST /cloud/delete path.
+        """
+        if _cloud_engine.providers:
+            asyncio.create_task(
+                run_cloud_sync_worker(_cloud_engine, float(cfg.cloud_sync_interval_s))
+            )
+
+    _CLOUD_ERRORS = {
+        CloudError.NotConfigured: 503,
+        CloudError.Unsupported: 400,
+        CloudError.AuthError: 502,
+        CloudError.NetworkError: 502,
+        CloudError.RateLimited: 429,
+        CloudError.NotFound: 404,
+        CloudError.StateError: 500,
+        CloudError.AuditError: 500,
+    }
+
+    @app.get("/cloud/status")
+    async def cloud_status() -> CloudStatus:
+        """Per-provider sync/verify/delete counters and last-sync info."""
+        return _cloud_engine.status()
+
+    @app.post("/cloud/sync")
+    async def cloud_sync(req: CloudSyncRequest) -> CloudSyncAck:
+        """Schedule an immediate sync (all providers, or one) as a background task."""
+        if req.provider is not None:
+            provider = _cloud_engine.provider_by_name(req.provider)
+            if provider is None:
+                return CloudSyncAck(status="unknown_provider", providers=[])
+            targets = [provider]
+        else:
+            targets = list(_cloud_engine.providers)
+        if not targets:
+            return CloudSyncAck(status="no_providers", providers=[])
+
+        async def _run() -> None:
+            for p in targets:
+                await _cloud_engine.sync_provider(p)
+
+        asyncio.create_task(_run())
+        return CloudSyncAck(status="started", providers=[p.name for p in targets])
+
+    @app.get("/cloud/deletable")
+    async def cloud_deletable(provider: str = Query(...)) -> DeletablePage:
+        """Dry-run list of remote items verified safe to delete right now."""
+        prov = _cloud_engine.provider_by_name(provider)
+        if prov is None:
+            raise HTTPException(status_code=404, detail="Unknown cloud provider")
+        loop = asyncio.get_running_loop()
+        entries = await loop.run_in_executor(
+            None, dry_run_deletable, _cloud_engine, prov
+        )
+        return DeletablePage(provider=provider, items=entries, total=len(entries))
+
+    @app.post("/cloud/delete")
+    async def cloud_delete(req: CloudDeleteRequest) -> DeleteReport:
+        """Verified deletion from the cloud; refuses without explicit confirm."""
+        if not req.confirm:
+            raise HTTPException(
+                status_code=400,
+                detail="confirm must be true to delete from the cloud",
+            )
+        prov = _cloud_engine.provider_by_name(req.provider)
+        if prov is None:
+            raise HTTPException(status_code=404, detail="Unknown cloud provider")
+        cap = req.cap if req.cap is not None else cfg.cloud_delete_cap
+        result = await delete_verified(_cloud_engine, prov, confirm=True, cap=cap)
+        if result.is_err:
+            status = _CLOUD_ERRORS.get(result.danger_err, 500)
+            raise HTTPException(status_code=status, detail=str(result.danger_err))
+        return result.danger_ok
 
     @app.get("/")
     async def root() -> Tag:

@@ -901,6 +901,36 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
      description that reveals a plain-language explanation in context.
      Replaces the old auto-popup walkthrough. */
   .help { position: relative; display: inline-block; vertical-align: middle; }
+  .cloud-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.9rem;
+    background: var(--bg-alt);
+  }
+  .cloud-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .cloud-card-head h3 { margin: 0; font-size: 1.05rem; }
+  .cloud-badge {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 700;
+  }
+  .cloud-badge.ok { background: #2f6b34; color: #eaffea; }
+  .cloud-badge.off { background: #6b2f2f; color: #ffeaea; }
+  .cloud-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.2rem;
+    margin: 0.7rem 0;
+  }
+  .cloud-stat-val { font-size: 1.4rem; font-weight: 700; }
+  .cloud-stat-lbl { font-size: 0.75rem; color: var(--muted); }
   .help-tip {
     width: 28px;
     height: 28px;
@@ -1215,9 +1245,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
+    /* Force the destructive actions onto their own row, flush to the left. */
+    flex-basis: 100%;
     margin-left: 0;
-    padding-left: 0.75rem;
-    border-left: 1px dashed var(--border);
+    padding-left: 0;
   }
   #bulk-soft-delete {
     color: var(--err);
@@ -1705,6 +1736,31 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           <input type="checkbox" id="people-show-small">
           <span>Also show small, uncertain groups (fewer than 3 photos).</span>
         </label>
+      </div>
+    </section>
+
+    <section id="cloud-section">
+      <div class="people-head">
+        <h2>Cloud photos</h2>
+        <span class="help">
+          <button class="help-tip" type="button"
+                  aria-label="What is cloud photo sync?">?</button>
+          <span class="help-bubble">Malmberg can copy photos down from your
+          cloud accounts (Google Photos, iCloud) into this server, then --
+          only after checking the copy here matches byte-for-byte -- offer to
+          remove them from the cloud to free up space. Nothing is ever deleted
+          from the cloud without your explicit confirmation.</span>
+        </span>
+      </div>
+      <div class="domain-sub">
+        Connect an account with the setup scripts, then sync on a timer or on
+        demand. Cleanup only ever touches photos verified as safely stored
+        here.
+      </div>
+      <div id="cloud-providers"></div>
+      <div id="cloud-empty" class="domain-sub">
+        No cloud providers are enabled. See the operations guide to connect
+        Google Photos or iCloud.
       </div>
     </section>
 
@@ -3984,6 +4040,148 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
   }
 
+  /* ---- Cloud photos: per-provider status, sync-now, and a guarded cleanup
+     flow (dry-run count -> strong confirm -> confirmed delete). Status and
+     deletable are read-only and proxied in both roles; sync and delete are
+     server-only writes, so their buttons are omitted on a display. ---- */
+  var cloudProviders = document.getElementById('cloud-providers');
+  var cloudEmpty = document.getElementById('cloud-empty');
+
+  function cloudFmtTime(iso) {
+    if (!iso) return 'never';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString();
+  }
+
+  function loadCloud() {
+    if (!cloudProviders) return;
+    fetch('/cloud/status')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var providers = (data && data.providers) || [];
+        cloudProviders.innerHTML = '';
+        cloudEmpty.style.display = providers.length === 0 ? 'block' : 'none';
+        providers.forEach(function (p) { cloudProviders.appendChild(cloudCard(p)); });
+      })
+      .catch(function () {
+        cloudEmpty.style.display = 'block';
+        cloudEmpty.textContent = 'Could not load cloud status.';
+      });
+  }
+
+  function cloudStat(label, value) {
+    var wrap = document.createElement('div');
+    wrap.className = 'cloud-stat';
+    var v = document.createElement('div');
+    v.className = 'cloud-stat-val';
+    v.textContent = String(value);
+    var l = document.createElement('div');
+    l.className = 'cloud-stat-lbl';
+    l.textContent = label;
+    wrap.appendChild(v);
+    wrap.appendChild(l);
+    return wrap;
+  }
+
+  function cloudCard(p) {
+    var card = document.createElement('div');
+    card.className = 'cloud-card';
+
+    var head = document.createElement('div');
+    head.className = 'cloud-card-head';
+    var title = document.createElement('h3');
+    title.textContent = p.name === 'google_photos' ? 'Google Photos'
+      : (p.name === 'icloud' ? 'iCloud' : p.name);
+    head.appendChild(title);
+    var badge = document.createElement('span');
+    badge.className = 'cloud-badge ' + (p.configured ? 'ok' : 'off');
+    badge.textContent = p.configured ? 'Connected'
+      : (p.enabled ? 'Not set up' : 'Disabled');
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    var meta = document.createElement('div');
+    meta.className = 'domain-sub';
+    meta.textContent = 'Last sync: ' + cloudFmtTime(p.last_sync_at)
+      + (p.last_error ? (' (last error: ' + p.last_error + ')') : '');
+    card.appendChild(meta);
+
+    var grid = document.createElement('div');
+    grid.className = 'cloud-stats';
+    grid.appendChild(cloudStat('Tracked', p.tracked));
+    grid.appendChild(cloudStat('Verified', p.verified));
+    grid.appendChild(cloudStat('Deleted from cloud', p.deleted_from_cloud));
+    card.appendChild(grid);
+
+    if (MALMBERG_ROLE !== 'display') {
+      var actions = document.createElement('div');
+      actions.className = 'controls';
+      var syncBtn = document.createElement('button');
+      syncBtn.type = 'button';
+      syncBtn.textContent = 'Sync now';
+      syncBtn.addEventListener('click', function () { cloudSyncNow(p.name); });
+      actions.appendChild(syncBtn);
+      var cleanBtn = document.createElement('button');
+      cleanBtn.type = 'button';
+      cleanBtn.className = 'danger-btn';
+      cleanBtn.textContent = 'Clean up cloud';
+      cleanBtn.addEventListener('click', function () { cloudCleanup(p.name); });
+      actions.appendChild(cleanBtn);
+      card.appendChild(actions);
+    }
+    return card;
+  }
+
+  function cloudSyncNow(name) {
+    fetch('/cloud/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: name })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (ack) {
+        if (ack && ack.status === 'started') {
+          showToast('Sync started; new photos appear as they arrive.', 'ok');
+          setTimeout(loadCloud, 3000);
+        } else if (ack && ack.status === 'no_providers') {
+          showToast('No cloud providers are enabled.', 'err');
+        } else {
+          showToast('Could not start sync.', 'err');
+        }
+      })
+      .catch(function () { showToast('Could not start sync.', 'err'); });
+  }
+
+  function cloudCleanup(name) {
+    fetch('/cloud/deletable?provider=' + encodeURIComponent(name))
+      .then(function (r) { return r.json(); })
+      .then(function (page) {
+        var n = (page && page.total) || 0;
+        if (n === 0) {
+          showToast('Nothing verified to clean up yet.', 'ok');
+          return;
+        }
+        var msg = 'Permanently delete ' + n + ' photos from ' + name
+          + '? They are verified to be saved on this server. '
+          + 'This cannot be undone.';
+        if (!window.confirm(msg)) return;
+        fetch('/cloud/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: name, confirm: true })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (report) {
+            var deleted = (report && report.deleted) || 0;
+            showToast('Deleted ' + deleted + ' from ' + name + '.', 'ok');
+            loadCloud();
+          })
+          .catch(function () { showToast('Cleanup failed.', 'err'); });
+      })
+      .catch(function () { showToast('Could not check what is deletable.', 'err'); });
+  }
+
   /* ---- Click-to-open help tips: tapping a "?" toggles the plain-language
      bubble next to that control; tapping anywhere else closes it. Replaces
      the old auto-popup walkthrough (dependency-free, no localStorage). ---- */
@@ -4006,6 +4204,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   loadStats();
   refreshStatus();
   loadGrid();
+  loadCloud();
   if (MALMBERG_ROLE !== "display") {
     loadPlaylists();
     loadYearFilter();
