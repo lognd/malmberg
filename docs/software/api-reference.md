@@ -119,6 +119,18 @@ schema change never requires a manual re-ingest of existing files.
 | `page_size` | int | `50` | 1--500 | Items per page |
 | `sort` | str | `"id"` | `"id"` \| `"recent"` | `"recent"` orders newest first by `meta.taken_at`, falling back to `meta.ingest_at` |
 | `q` | str | none | -- | Filters to items whose `filename` contains *q* (case-insensitive), whose `meta.taken_at` year equals *q* when *q* is a 4-digit year, whose `meta.taken_at` year and month equal *q* when *q* is `YYYY-MM`, whose `meta.place` contains *q* (case-insensitive), or (for `/media`) a detected person's name contains *q* |
+| `q_time` | str | none | -- | Filters to items whose `meta.taken_at` matches a 4-digit year or `YYYY-MM` |
+| `q_place` | str | none | -- | Filters to items whose `meta.place` contains *q_place* (case-insensitive) |
+| `q_person` | str | none | -- | Filters to items with a detected person whose name contains *q_person* (case-insensitive) |
+
+`q_time`, `q_place`, and `q_person` are independent filters that combine with
+each other, and with `q`, by **AND**: an item must satisfy every filter that
+is given (e.g. `q_time=2006&q_place=Tampa` returns only 2006 photos taken in
+Tampa). `q` alone keeps its original OR-across-fields behavior (used by the
+dashboard's free-text search and by `POST /control/play-query`); the
+dashboard's Time/Place/Person boxes use `q_time`/`q_place`/`q_person` so they
+AND together instead of OR-matching a single combined box. See
+`MediaStore._matches_filters` in `ingest/store.py`.
 
 **Response: `MediaPage`**
 
@@ -260,11 +272,22 @@ loop is never blocked.
 
 Assign or change a detected person's display name.
 
+If the given name is a near-duplicate of an existing named person's name,
+this person is instead **merged into** that existing person (faces
+reassigned, this person id dropped) rather than creating a second person
+with essentially the same name; the existing person keeps its id and name.
+Name matching is case-insensitive and trimmed, and tolerant of small typos
+via Levenshtein edit distance (`<=1` for names of length `<=5`, `<=2`
+otherwise -- see `PersonStore._find_duplicate_name` /
+`PersonStore.rename_with_dedup` in `faces/people.py`). Otherwise, the name is
+just set on `id`.
+
 **Path parameters:** `id` -- the person id (from `GET /people`).
 
 **Request body:** `{"name": str}`
 
-**Response:** the updated Person record.
+**Response:** the "winning" Person record -- the existing person when a merge
+happened, otherwise `id` with its new name.
 
 **Errors:**
 - `400` -- empty name

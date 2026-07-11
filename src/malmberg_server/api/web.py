@@ -674,6 +674,21 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     align-items: center;
     justify-content: center;
   }
+  #now-thumb-wrap .now-thumb-btn {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    display: block;
+  }
+  #now-thumb-wrap .now-thumb-btn:hover,
+  #now-thumb-wrap .now-thumb-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
   #now-thumb-wrap img {
     width: 100%;
     height: 100%;
@@ -804,6 +819,46 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     background: var(--accent);
     color: #282828;
     border-color: var(--accent);
+  }
+  /* Independent AND-ed filter boxes (Time / Place / Person) */
+  .filter-box-row {
+    margin-top: 0.9rem;
+  }
+  .filter-box-row label {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+  }
+  .filter-box-row input {
+    width: 100%;
+    min-height: 48px;
+    font-size: 1rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--text);
+    box-sizing: border-box;
+  }
+  /* Compact, browsable preview strip under "Show on the frame" */
+  #frame-preview-wrap { margin-top: 0.8rem; }
+  #frame-preview-label {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+  .preview-grid {
+    grid-template-columns: repeat(6, 1fr);
+    max-height: 11rem;
+    overflow: hidden;
+  }
+  @media (max-width: 520px) {
+    .preview-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  #frame-preview-empty {
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: none;
   }
   #month-filter-toggle { margin-top: 0.6rem; min-height: 44px; padding: 0.3rem 0.9rem; }
   #month-filter-buttons {
@@ -1518,8 +1573,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         </div>
         <div id="frame-quick-row">
           <div id="year-filter-buttons"></div>
-          <button id="month-filter-toggle" type="button" class="collapse-btn">
-            Months
+          <button id="month-filter-toggle" type="button" class="collapse-btn"
+                  aria-label="Show or hide months">
+            Show months
           </button>
         </div>
         <div id="month-filter-buttons" class="collapsed"></div>
@@ -1530,6 +1586,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             placeholder="or type a year, place, or name...">
           <datalist id="frame-search-suggestions"></datalist>
           <button id="frame-search-play-btn" type="button">Show on frame</button>
+        </div>
+        <div id="frame-preview-wrap">
+          <div id="frame-preview-label">Preview: what this will show</div>
+          <div class="grid preview-grid" id="frame-preview-grid"></div>
+          <div id="frame-preview-empty">Nothing matches yet.</div>
+          <div class="pagination">
+            <button id="frame-preview-prev" type="button">Previous</button>
+            <span class="page-info" id="frame-preview-info"></span>
+            <button id="frame-preview-next" type="button">Next</button>
+          </div>
         </div>
       </div>
       <div id="loop-toggle-row">
@@ -1580,23 +1646,38 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <span class="help">
           <button class="help-tip" type="button"
                   aria-label="How search works">?</button>
-          <span class="help-bubble">Type a year (2006), a month (2006-07), a
-          place (Tampa), or a person's name. The photo grid below updates as you
-          type. To put these on the TV instead, use "Show on the frame" up top.
+          <span class="help-bubble">Fill in any combination of Time, Place,
+          and Person -- the photo grid below shows only photos matching ALL
+          the boxes you fill in. Leave a box empty to ignore it. To put these
+          on the TV instead, use "Show on the frame" up top.
           </span>
         </span>
       </h2>
-      <div class="search-row" id="place-search-row">
-        <input id="place-input" type="text" autocomplete="off"
-          list="place-suggestions"
-          placeholder="By time or place, e.g. 2006, 2006-07, or Tampa">
-        <datalist id="place-suggestions"></datalist>
+      <div class="filter-box-row">
+        <label for="time-input">Time</label>
+        <input id="time-input" type="text" autocomplete="off"
+          aria-label="Filter by time, e.g. 2006 or 2006-07"
+          placeholder="e.g. 2006 or 2006-07">
       </div>
-      <div class="search-row" id="person-search-row">
-        <input id="person-input" type="text" autocomplete="off"
-          list="person-suggestions"
-          placeholder="By a person's name">
-        <datalist id="person-suggestions"></datalist>
+      <div class="filter-box-row">
+        <label for="place-input">Place</label>
+        <div class="search-row" id="place-search-row">
+          <input id="place-input" type="text" autocomplete="off"
+            list="place-suggestions"
+            aria-label="Filter by place"
+            placeholder="e.g. Tampa">
+          <datalist id="place-suggestions"></datalist>
+        </div>
+      </div>
+      <div class="filter-box-row">
+        <label for="person-input">Person</label>
+        <div class="search-row" id="person-search-row">
+          <input id="person-input" type="text" autocomplete="off"
+            list="person-suggestions"
+            aria-label="Filter by a person's name"
+            placeholder="By a person's name">
+          <datalist id="person-suggestions"></datalist>
+        </div>
       </div>
     </section>
 
@@ -1680,7 +1761,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         Photos deleted with "Delete (recoverable)" land here. Restore them,
         or delete them permanently.
       </div>
-      <button id="trash-toggle-btn" type="button">Show recycle bin</button>
+      <button id="trash-toggle-btn" type="button" class="collapse-btn"
+              aria-label="Show or hide the recycle bin">Show recycle bin</button>
       <div id="trash-panel">
         <div id="trash-empty">Recycle bin is empty.</div>
         <div class="grid" id="trash-grid"></div>
@@ -1858,10 +1940,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           chip.title = "Search and browse " + year;
           chip.setAttribute("aria-label", "Search and browse photos from " + year);
           chip.addEventListener("click", function () {
-            searchInput.value = year;
-            state.q = year;
+            timeInput.value = year;
+            state.qTime = year;
             state.page = 1;
             loadGrid();
+            showResultsBelow();
           });
           byYear.appendChild(chip);
         });
@@ -1896,10 +1979,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
               "Search and browse photos from " + monthName + " " + year
             );
             chip.addEventListener("click", function () {
-              searchInput.value = ym;
-              state.q = ym;
+              timeInput.value = ym;
+              state.qTime = ym;
               state.page = 1;
               loadGrid();
+              showResultsBelow();
             });
             monthsEl.appendChild(chip);
           });
@@ -1919,11 +2003,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           chip.title = "Search and browse " + place;
           chip.setAttribute("aria-label", "Search and browse photos from " + place);
           chip.addEventListener("click", function () {
-            searchInput.value = place;
-            state.q = place;
+            placeInput.value = place;
+            state.qPlace = place;
             state.page = 1;
             loadGrid();
-            placeInput.value = place;
+            showResultsBelow();
           });
           byPlace.appendChild(chip);
         });
@@ -1939,11 +2023,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           chip.title = "Search and browse photos of " + name;
           chip.setAttribute("aria-label", "Search and browse photos of " + name);
           chip.addEventListener("click", function () {
-            searchInput.value = name;
-            state.q = name;
+            personInput.value = name;
+            state.qPerson = name;
             state.page = 1;
             loadGrid();
-            personInput.value = name;
+            showResultsBelow();
           });
           byPerson.appendChild(chip);
         });
@@ -2118,10 +2202,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     lastCurrentItemId = itemId;
     nowThumbWrap.innerHTML = "";
     if (itemId) {
+      // The now-showing photo is a real library item: make it a big clickable
+      // button that opens that photo's options (details / delete / show).
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "now-thumb-btn";
+      btn.setAttribute("aria-label", "See options for the photo now showing");
+      btn.title = "Tap to see this photo's options";
+      btn.addEventListener("click", function () { openModal(itemId); });
       var img = document.createElement("img");
       img.src = "/media/" + itemId + "/thumb?size=160";
       img.alt = "Now showing";
-      nowThumbWrap.appendChild(img);
+      btn.appendChild(img);
+      nowThumbWrap.appendChild(btn);
     } else {
       var ph = document.createElement("span");
       ph.className = "placeholder";
@@ -2201,6 +2294,78 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       : base + " It plays once, then all photos come back.";
   }
 
+  /* ---- Show-on-frame preview strip: a small, browsable grid of what a
+     given query will show on the TV, so the user can see before/when they
+     press "Show on frame". ---- */
+  var framePreviewGrid = document.getElementById("frame-preview-grid");
+  var framePreviewEmpty = document.getElementById("frame-preview-empty");
+  var framePreviewPrev = document.getElementById("frame-preview-prev");
+  var framePreviewNext = document.getElementById("frame-preview-next");
+  var framePreviewInfo = document.getElementById("frame-preview-info");
+  var FRAME_PREVIEW_PAGE_SIZE = 12;
+  var framePreviewState = { q: "", page: 1, hasNext: false, total: 0 };
+
+  function renderFramePreview(items) {
+    framePreviewGrid.innerHTML = "";
+    items.forEach(function (item) {
+      var tile = document.createElement("div");
+      tile.className = "tile";
+      var img = document.createElement("img");
+      img.src = "/media/" + item.id + "/thumb?size=200";
+      img.alt = item.filename;
+      img.loading = "lazy";
+      tile.appendChild(img);
+      framePreviewGrid.appendChild(tile);
+    });
+  }
+
+  function loadFramePreview(query, page) {
+    framePreviewState.q = query;
+    framePreviewState.page = page || 1;
+    if (!query) {
+      framePreviewGrid.innerHTML = "";
+      framePreviewEmpty.style.display = "none";
+      framePreviewInfo.textContent = "";
+      framePreviewPrev.disabled = true;
+      framePreviewNext.disabled = true;
+      return;
+    }
+    var params = "q=" + encodeURIComponent(query) +
+      "&page=" + framePreviewState.page +
+      "&page_size=" + FRAME_PREVIEW_PAGE_SIZE + "&sort=recent";
+    fetch("/media?" + params)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var items = data.items || [];
+        framePreviewState.hasNext = !!data.has_next;
+        framePreviewState.total = data.total || 0;
+        renderFramePreview(items);
+        framePreviewEmpty.style.display = items.length ? "none" : "block";
+        framePreviewInfo.textContent = framePreviewState.total
+          ? "Page " + framePreviewState.page + " of " +
+            Math.max(1, Math.ceil(framePreviewState.total / FRAME_PREVIEW_PAGE_SIZE))
+          : "";
+        framePreviewPrev.disabled = framePreviewState.page <= 1;
+        framePreviewNext.disabled = !framePreviewState.hasNext;
+      })
+      .catch(function () {
+        framePreviewGrid.innerHTML = "";
+        framePreviewEmpty.textContent = "Could not load preview.";
+        framePreviewEmpty.style.display = "block";
+      });
+  }
+
+  framePreviewPrev.addEventListener("click", function () {
+    if (framePreviewState.page > 1) {
+      loadFramePreview(framePreviewState.q, framePreviewState.page - 1);
+    }
+  });
+  framePreviewNext.addEventListener("click", function () {
+    if (framePreviewState.hasNext) {
+      loadFramePreview(framePreviewState.q, framePreviewState.page + 1);
+    }
+  });
+
   function setActiveYear(btn) {
     var all = yearFilterButtons.querySelectorAll("button");
     for (var i = 0; i < all.length; i++) all[i].classList.remove("yf-active");
@@ -2235,6 +2400,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           btn.addEventListener("click", function () {
             setActiveYear(btn);
             setActiveMonth(null);
+            loadFramePreview(year, 1);
             runControl(
               btn,
               "/control/play-query?q=" + encodeURIComponent(year) +
@@ -2283,6 +2449,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             btn.addEventListener("click", function () {
               setActiveYear(null);
               setActiveMonth(btn);
+              loadFramePreview(ym, 1);
               runControl(
                 btn,
                 "/control/play-query?q=" + encodeURIComponent(ym) +
@@ -2406,10 +2573,26 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   var PAGE_SIZE = 24;
   var state = {
-    page: 1, q: "", hasNext: false, total: 0, items: [],
+    page: 1, q: "", qTime: "", qPlace: "", qPerson: "",
+    hasNext: false, total: 0, items: [],
     selectMode: false, selected: {},
   };
   var searchDebounce = null;
+
+  /* When a filter/search runs, the tall People section can hide the
+     results below it -- collapse it and scroll the grid into view so the
+     photos the user just asked for are immediately visible. */
+  function showResultsBelow() {
+    if (peopleBody && !peopleBody.classList.contains("collapsed")) {
+      peopleBody.classList.add("collapsed");
+      peopleToggle.textContent = "Show";
+    }
+    var target = document.getElementById("results-summary");
+    if (target && target.scrollIntoView) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    showToast("Showing results below.", "ok");
+  }
 
   function totalPages() {
     return Math.max(1, Math.ceil(state.total / PAGE_SIZE));
@@ -2494,6 +2677,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     var params = "page=" + state.page + "&page_size=" + PAGE_SIZE +
       "&sort=recent";
     if (state.q) params += "&q=" + encodeURIComponent(state.q);
+    if (state.qTime) params += "&q_time=" + encodeURIComponent(state.qTime);
+    if (state.qPlace) params += "&q_place=" + encodeURIComponent(state.qPlace);
+    if (state.qPerson) params += "&q_person=" + encodeURIComponent(state.qPerson);
 
     fetch("/media?" + params)
       .then(function (r) { return r.json(); })
@@ -2536,14 +2722,20 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       state.q = value.trim();
       state.page = 1;
       loadGrid();
+      if (state.q) showResultsBelow();
     }, 350);
   });
 
-  /* ---- Library search boxes (filter the browse grid only) ---- */
+  /* ---- Library search boxes (filter the browse grid only) ----
+     Time / Place / Person are independent boxes that AND together via
+     separate q_time / q_place / q_person params -- filling in more than
+     one narrows the results to items matching ALL of them. */
+  var timeInput = document.getElementById("time-input");
   var placeInput = document.getElementById("place-input");
   var placeSuggestions = document.getElementById("place-suggestions");
   var personInput = document.getElementById("person-input");
   var personSuggestions = document.getElementById("person-suggestions");
+  var timeDebounce = null;
   var placeDebounce = null;
   var personDebounce = null;
 
@@ -2570,18 +2762,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .catch(function () {});
   }
 
-  function filterGridFrom(input) {
-    searchInput.value = input.value;
-    state.q = input.value.trim();
-    state.page = 1;
-    loadGrid();
-  }
+  timeInput.addEventListener("input", function () {
+    if (timeDebounce) window.clearTimeout(timeDebounce);
+    timeDebounce = window.setTimeout(function () {
+      state.qTime = timeInput.value.trim();
+      state.page = 1;
+      loadGrid();
+      if (state.qTime) showResultsBelow();
+    }, 350);
+  });
 
   placeInput.addEventListener("input", function () {
     if (placeDebounce) window.clearTimeout(placeDebounce);
     placeDebounce = window.setTimeout(function () {
       loadPlaceSuggestions(placeInput.value.trim(), placeSuggestions);
-      filterGridFrom(placeInput);
+      state.qPlace = placeInput.value.trim();
+      state.page = 1;
+      loadGrid();
+      if (state.qPlace) showResultsBelow();
     }, 350);
   });
 
@@ -2589,7 +2787,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (personDebounce) window.clearTimeout(personDebounce);
     personDebounce = window.setTimeout(function () {
       loadPersonSuggestions(personInput.value.trim(), personSuggestions);
-      filterGridFrom(personInput);
+      state.qPerson = personInput.value.trim();
+      state.page = 1;
+      loadGrid();
+      if (state.qPerson) showResultsBelow();
     }, 350);
   });
 
@@ -2632,6 +2833,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (frameSearchDebounce) window.clearTimeout(frameSearchDebounce);
     frameSearchDebounce = window.setTimeout(function () {
       loadFrameSuggestions(frameSearchInput.value.trim());
+      loadFramePreview(frameSearchInput.value.trim(), 1);
     }, 350);
   });
 
@@ -2643,6 +2845,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     }
     setActiveYear(null);
     setActiveMonth(null);
+    loadFramePreview(query, 1);
     runControl(frameSearchPlayBtn,
       "/control/play-query?q=" + encodeURIComponent(query) + "&loop=" + isLoop(),
       "POST", undefined, "...",
@@ -2654,6 +2857,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   });
 
   loadFrameSuggestions("");
+  loadFramePreview("", 1);
 
   /* ---- People: compact collapsible cards, naming, review, merge ---- */
   var peopleGrid = document.getElementById("people-grid");
@@ -2684,7 +2888,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   function refreshPersonDatalists() {
     loadPersonSuggestions("", personSuggestions);
-    loadPersonSuggestions("", framePersonSuggestions);
+    loadFrameSuggestions("");
   }
 
   function makePersonCard(person) {

@@ -217,6 +217,62 @@ def test_merge_unknown_person() -> None:
 
 
 # ---------------------------------------------------------------------------
+# rename_with_dedup: name-collision merge
+# ---------------------------------------------------------------------------
+
+
+def test_rename_dedup_exact_case_merges() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+    people.rename(p1, "Alice")
+
+    result = people.rename_with_dedup(p2, "Alice", faces)
+    assert result.is_ok
+    assert result.danger_ok.id == p1
+    assert people.get(p2) is None
+    assert people.get(p1).face_count == 2
+
+
+def test_rename_dedup_different_case_merges() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+    people.rename(p1, "Alice")
+
+    result = people.rename_with_dedup(p2, "  alice  ", faces)
+    assert result.is_ok
+    assert result.danger_ok.id == p1
+    assert people.get(p2) is None
+
+
+def test_rename_dedup_typo_merges() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+    people.rename(p1, "Alice")
+
+    result = people.rename_with_dedup(p2, "Alicee", faces)
+    assert result.is_ok
+    assert result.danger_ok.id == p1
+    assert people.get(p2) is None
+
+
+def test_rename_dedup_new_name_does_not_merge() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+    people.rename(p1, "Alice")
+
+    result = people.rename_with_dedup(p2, "Bob", faces)
+    assert result.is_ok
+    assert result.danger_ok.id == p2
+    assert result.danger_ok.name == "Bob"
+    assert people.get(p1) is not None
+    assert people.get(p1).name == "Alice"
+
+
+# ---------------------------------------------------------------------------
 # min_count gate
 # ---------------------------------------------------------------------------
 

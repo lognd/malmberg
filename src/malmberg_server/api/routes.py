@@ -272,6 +272,9 @@ def build_app(
         page_size: int = Query(default=50, ge=1, le=500),
         sort: Literal["id", "recent"] = Query(default="id"),
         q: Optional[str] = Query(default=None),
+        q_time: Optional[str] = Query(default=None),
+        q_place: Optional[str] = Query(default=None),
+        q_person: Optional[str] = Query(default=None),
     ) -> MediaPage:
         result = _store.list(
             page=page,
@@ -280,6 +283,9 @@ def build_app(
             sort=sort,
             media_root=_media_root(),
             q=q,
+            q_time=q_time,
+            q_place=q_place,
+            q_person=q_person,
             people=_people,
         )
         if _store.pop_dirty():
@@ -400,9 +406,11 @@ def build_app(
         name = body.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="name required")
-        result = _people.rename(person_id, name)
+        result = _people.rename_with_dedup(person_id, name, _faces)
         if result.is_err:
             raise HTTPException(status_code=404, detail="Person not found")
+        sync_person_ids(_store, _faces)
+        _save_faces_state()
         save = _people.save_to_disk(_people_path())
         if save.is_err:
             _log.error("Failed to persist people index after rename")

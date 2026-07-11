@@ -41,6 +41,28 @@ _MAX_SAMPLE_ITEMS = 12
 """Cap on Person.sample_item_ids so the record doesn't grow unbounded."""
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Return the Levenshtein edit distance between *a* and *b* (pure Python)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(
+                prev[j] + 1,  # deletion
+                curr[j - 1] + 1,  # insertion
+                prev[j - 1] + cost,  # substitution
+            )
+        prev = curr
+    return prev[-1]
+
+
 class PersonError:
     """Marker namespace for PersonStore error kinds (see typani.result.Result)."""
 
@@ -286,6 +308,62 @@ class PersonStore:
         self._people[person_id] = updated
         _log.info("Named person %s -> %r", person_id, updated.name)
         return Ok(updated)
+
+    def rename_with_dedup(
+        self, person_id: str, name: str, faces: FaceStore
+    ) -> Result[Person, str]:
+        """Name *person_id* as *name*, merging into an existing near-duplicate.
+
+        Names are compared case-insensitively, trimmed, and tolerant of small
+        typos via Levenshtein edit distance (<=1 for names of length <=5,
+        <=2 otherwise). If an existing *different* named person is a
+        near-duplicate of *name*, this person is merged INTO that existing
+        person (its faces reassigned, this person dropped) instead of
+        creating a second person with essentially the same name; the
+        existing person keeps its own name/id. Otherwise, just sets the name
+        on *person_id*. Returns the surviving Person (the "winner").
+        """
+        if person_id not in self._people:
+            return Err(PersonError.NOT_FOUND)
+        clean = name.strip()
+        if not clean:
+            return self.rename(person_id, clean)
+
+        dup_id = self._find_duplicate_name(clean, exclude_id=person_id)
+        if dup_id is not None:
+            merged = self.merge(dup_id, person_id, faces)
+            if merged.is_err:
+                return merged
+            _log.info(
+                "Name %r for person %s duplicates person %s (%r); merged",
+                clean,
+                person_id,
+                dup_id,
+                self._people[dup_id].name,
+            )
+            return merged
+        return self.rename(person_id, clean)
+
+    def _find_duplicate_name(
+        self, name: str, *, exclude_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Return the id of an existing named person whose name near-matches *name*.
+
+        Comparison is case-insensitive/trimmed exact match, or edit-distance
+        tolerant (<=1 for <=5-char names, <=2 for longer names). None if no
+        existing person is close enough.
+        """
+        needle = name.strip().lower()
+        threshold = 1 if len(needle) <= 5 else 2
+        for pid, person in self._people.items():
+            if pid == exclude_id or not person.name:
+                continue
+            other = person.name.strip().lower()
+            if other == needle:
+                return pid
+            if _levenshtein(needle, other) <= threshold:
+                return pid
+        return None
 
     # ------------------------------------------------------------------
     # Queries

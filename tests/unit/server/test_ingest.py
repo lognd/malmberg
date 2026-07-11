@@ -271,6 +271,60 @@ def test_store_places_autocomplete() -> None:
     assert s.places(q="nowhere") == []
 
 
+def test_store_and_filters_time_and_place() -> None:
+    """q_time AND q_place returns only items matching BOTH, not either."""
+    from malmberg_server.faces.people import Person, PersonStore
+
+    people = PersonStore()
+    person = Person(name="Alice")
+    people._people[person.id] = person
+
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(
+                sha256="h1", taken_at=datetime(2006, 7, 4), place="Tampa, FL"
+            ),
+            person_ids=[person.id],
+        )
+    )
+    s.add(
+        _make_item(
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(
+                sha256="h2", taken_at=datetime(2006, 7, 4), place="Orlando, FL"
+            ),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="c.jpg",
+            server_path="p/c.jpg",
+            meta=MediaMetadata(
+                sha256="h3", taken_at=datetime(2010, 1, 1), place="Tampa, FL"
+            ),
+        )
+    )
+
+    page = s.list(q_time="2006", q_place="Tampa")
+    assert page.total == 1
+    assert page.items[0].filename == "a.jpg"
+
+    # Person filter AND'd with time.
+    page2 = s.list(q_time="2006", q_person="Alice", people=people)
+    assert page2.total == 1
+    assert page2.items[0].filename == "a.jpg"
+
+    # No filters given -> everything.
+    assert s.list().total == 3
+
+    # Filter with no match -> empty.
+    assert s.list(q_time="2006", q_place="Nowhere").total == 0
+
+
 def test_store_patch_not_found() -> None:
     s = MediaStore()
     result = s.patch("nonexistent", {"do_not_display": True})

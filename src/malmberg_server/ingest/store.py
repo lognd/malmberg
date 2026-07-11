@@ -211,6 +211,9 @@ class MediaStore:
         sort: str = "id",
         media_root: Optional[Path] = None,
         q: Optional[str] = None,
+        q_time: Optional[str] = None,
+        q_place: Optional[str] = None,
+        q_person: Optional[str] = None,
         people: Optional["PersonStore"] = None,
     ) -> MediaPage:
         """Return a paginated slice of the media index.
@@ -223,7 +226,12 @@ class MediaStore:
         (case-insensitive), whose ``meta.taken_at`` year equals *q* when *q*
         is a 4-digit year, whose ``meta.place`` contains *q*
         (case-insensitive), or (when *people* is given) whose detected
-        person(s) have a name containing *q*.
+        person(s) have a name containing *q*. *q_time*, *q_place*,
+        *q_person*, if given, are combined with *q* and each other by AND:
+        an item must match every provided filter. *q_time* matches a
+        4-digit year or ``YYYY-MM`` against ``meta.taken_at``; *q_place* is
+        a case-insensitive substring of ``meta.place``; *q_person* matches a
+        person name (via *people*) present on the item.
         """
         all_items = [
             it
@@ -233,6 +241,18 @@ class MediaStore:
         if q:
             all_items = [
                 it for it in all_items if self._matches_query(it, q, people=people)
+            ]
+        if q_time or q_place or q_person:
+            all_items = [
+                it
+                for it in all_items
+                if self._matches_filters(
+                    it,
+                    q_time=q_time,
+                    q_place=q_place,
+                    q_person=q_person,
+                    people=people,
+                )
             ]
         if sort == "recent":
             all_items.sort(
@@ -458,6 +478,59 @@ class MediaStore:
                 if person is not None and person.name and needle in person.name.lower():
                     return True
         return False
+
+    @staticmethod
+    def _matches_time(item: MediaItem, q_time: str) -> bool:
+        """Return True if ``meta.taken_at`` matches a 4-digit year or ``YYYY-MM``."""
+        needle = q_time.strip().lower()
+        if item.meta.taken_at is None:
+            return False
+        if len(needle) == 4 and needle.isdigit():
+            return str(item.meta.taken_at.year) == needle
+        if (
+            len(needle) == 7
+            and needle[4] == "-"
+            and needle[:4].isdigit()
+            and needle[5:].isdigit()
+        ):
+            ym = f"{item.meta.taken_at.year:04d}-{item.meta.taken_at.month:02d}"
+            return ym == needle
+        return False
+
+    @staticmethod
+    def _matches_filters(
+        item: MediaItem,
+        *,
+        q_time: Optional[str] = None,
+        q_place: Optional[str] = None,
+        q_person: Optional[str] = None,
+        people: Optional["PersonStore"] = None,
+    ) -> bool:
+        """Return True if *item* satisfies EVERY provided filter (AND).
+
+        Each of *q_time*, *q_place*, *q_person* that is non-empty must match
+        independently; unspecified filters are ignored. See ``list`` for the
+        per-field matching rules.
+        """
+        if q_time and not MediaStore._matches_time(item, q_time):
+            return False
+        if q_place:
+            needle = q_place.strip().lower()
+            if item.meta.place is None or needle not in item.meta.place.lower():
+                return False
+        if q_person:
+            needle = q_person.strip().lower()
+            matched = False
+            if people is not None:
+                for pid in item.person_ids:
+                    person = people.get(pid)
+                    name = person.name.lower() if person and person.name else ""
+                    if name and needle in name:
+                        matched = True
+                        break
+            if not matched:
+                return False
+        return True
 
     def __len__(self) -> int:
         return len(self._items)
