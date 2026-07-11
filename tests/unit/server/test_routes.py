@@ -297,7 +297,12 @@ def test_control_status_proxies_to_display(
 
     r = app_client.get("/control/status")
     assert r.status_code == 200
-    assert r.json() == {"paused": False, "queue_depth": 3}
+    body = r.json()
+    # Proxied display status is merged with the multi-display roster.
+    assert body["paused"] is False
+    assert body["queue_depth"] == 3
+    assert body["selected"] == "display"
+    assert body["displays"] == [{"name": "display"}]
 
 
 def test_server_config_defaults() -> None:

@@ -106,6 +106,13 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     _start = datetime.now(timezone.utc)
     _store = store if store is not None else MediaStore()
     _playlists = PlaylistStore()
+    # Named displays for multi-display control (a lone display_url counts as one).
+    _displays: dict[str, str] = (
+        dict(cfg.displays)
+        if cfg.displays
+        else ({"display": cfg.display_url} if cfg.display_url else {})
+    )
+    _selected = {"name": next(iter(_displays), None)}
 
     def _media_root() -> Path:
         return cfg.fs_root / "media"
@@ -320,18 +327,19 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     ) -> dict:
         """Forward a control action to the paired display's control API.
 
-        Raises HTTPException(503) if no display_url is configured, or 502 if
-        the display could not be reached.
+        Raises HTTPException(503) if no display is configured, or 502 if the
+        selected display could not be reached.
         """
-        if not cfg.display_url:
+        target = _selected["name"]
+        if target is None or target not in _displays:
             raise HTTPException(
                 status_code=503,
-                detail="No display configured; set MALMBERG_DISPLAY_URL",
+                detail="No display configured; set MALMBERG_DISPLAY_URL(S)",
             )
         method, path = _CONTROL_ROUTES[name]
         if path_override is not None:
             path = path_override
-        url = cfg.display_url.rstrip("/") + path
+        url = _displays[target].rstrip("/") + path
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.request(method, url, json=json_body)
@@ -360,8 +368,31 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
 
     @app.get("/control/status")
     async def control_status() -> dict:
-        """Proxy: fetch the paired display's current slideshow status."""
-        return await _forward_to_display("status")
+        """Selected display's status, plus the roster of all known displays."""
+        roster = {
+            "displays": [{"name": n} for n in _displays],
+            "selected": _selected["name"],
+        }
+        if _selected["name"] is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No display configured; set MALMBERG_DISPLAY_URL(S)",
+            )
+        try:
+            status = await _forward_to_display("status")
+        except HTTPException as exc:
+            if exc.status_code == 502:  # configured but unreachable
+                return {**roster, "online": False, "current_item_id": None}
+            raise
+        return {**status, **roster}
+
+    @app.post("/control/select/{name}")
+    async def control_select(name: str) -> dict:
+        """Choose which display the /control/* actions target."""
+        if name not in _displays:
+            raise HTTPException(status_code=404, detail="Unknown display")
+        _selected["name"] = name
+        return {"selected": name}
 
     @app.post("/control/play-all")
     async def control_play_all() -> dict:
@@ -385,6 +416,21 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             "playlist",
             path_override="/slideshow/playlist",
             json_body={"item_ids": item_ids},
+        )
+
+    @app.post("/control/play-query")
+    async def control_play_query(q: str = Query(...)) -> dict:
+        """Play only the photos matching a search (e.g. a year) on the display."""
+        page = _store.list(
+            page=1, page_size=500, skip_hidden=True, sort="recent", q=q
+        )
+        ids = [it.id for it in page.items]
+        if not ids:
+            raise HTTPException(status_code=404, detail="No photos match that filter")
+        return await _forward_to_display(
+            "playlist",
+            path_override="/slideshow/playlist",
+            json_body={"item_ids": ids},
         )
 
     # ------------------------------------------------------------------

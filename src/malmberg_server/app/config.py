@@ -30,9 +30,16 @@ class ServerConfig(BaseModel):
     log_retention: int = 10
     """Number of log files to retain (same policy as backup_retention)."""
     display_url: Optional[str] = None
-    """Base URL of the paired display's control API (e.g. http://10.0.0.5:8443).
+    """Base URL of a single paired display's control API (e.g. http://10.0.0.5:8443).
 
-    When None, the /control/* endpoints return 503 rather than forwarding.
+    When None (and no `displays` map is set), /control/* returns 503.
+    """
+    displays: dict[str, str] = {}
+    """Named displays (name -> control base URL) for multi-display control.
+
+    Set via env MALMBERG_DISPLAY_URLS as "name=url,name=url". Takes precedence
+    over `display_url`; a lone `display_url` is treated as one display named
+    'display'.
     """
 
     @field_validator("max_upload_mb")
@@ -68,6 +75,14 @@ class ServerConfig(BaseModel):
             result["hide_policy"] = v
         if v := os.environ.get("MALMBERG_DISPLAY_URL"):
             result["display_url"] = v
+        if v := os.environ.get("MALMBERG_DISPLAY_URLS"):
+            displays: dict[str, str] = {}
+            for pair in v.split(","):
+                name, _, url = pair.partition("=")
+                if name.strip() and url.strip():
+                    displays[name.strip()] = url.strip()
+            if displays:
+                result["displays"] = displays
         return result
 
     @classmethod
