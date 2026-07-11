@@ -27,10 +27,10 @@ class VideoDisplay(Displayable):
 
     async def display(self, ctx: DisplayContext) -> None:
         """Play the video and block until it finishes."""
-        done = asyncio.Event()
         loop = asyncio.get_running_loop()
 
         player = ctx.mpv_player
+        own_player = player is None
         if player is None:
             player = mpv.MPV(
                 vo="gpu",
@@ -38,13 +38,14 @@ class VideoDisplay(Displayable):
                 fullscreen=True,
             )
 
-        def _on_end(_name: str, _value: object) -> None:
-            loop.call_soon_threadsafe(done.set)
-
-        player.observe_property("core-idle", _on_end)
-        player.play(str(self._path))
-        await done.wait()
-        player.unobserve_property("core-idle", _on_end)
+        try:
+            player.play(str(self._path))
+            # wait_for_playback blocks until the clip ends; run it off the loop
+            # rather than observing core-idle, which fires immediately while idle.
+            await loop.run_in_executor(None, player.wait_for_playback)
+        finally:
+            if own_player:
+                player.terminate()
 
 
 def _hw_decode_available(ctx: DisplayContext) -> bool:
