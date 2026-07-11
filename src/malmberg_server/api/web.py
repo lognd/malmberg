@@ -1215,7 +1215,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    margin-left: auto;
+    margin-left: 0;
     padding-left: 0.75rem;
     border-left: 1px dashed var(--border);
   }
