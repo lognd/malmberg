@@ -375,6 +375,7 @@ def _step_auto_update(
         restart_service="malmberg-display",
         run_as_user=service_user,
         dry=dry,
+        extras=("display",),  # keep pygame/mpv/Pillow across auto-updates
     )
     warnings.extend(warns)
     return summary

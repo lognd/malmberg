@@ -41,7 +41,7 @@ fi
 logger -t malmberg-update "new revision $REMOTE (was $LOCAL); updating"
 git reset --hard "origin/$BRANCH"
 UVLOG=/tmp/malmberg-update-uv.log
-{uv} sync --frozen --project "$REPO" >"$UVLOG" 2>&1 || \
+{uv} sync --frozen {extras}--project "$REPO" >"$UVLOG" 2>&1 || \
     logger -t malmberg-update "warning: uv sync failed (see $UVLOG)"
 chown -R {user}:{user} "$REPO"
 systemctl restart {service}
@@ -101,12 +101,14 @@ def install_github_autoupdate(
     restart_service: str,
     run_as_user: str,
     dry: bool,
+    extras: tuple[str, ...] = (),
 ) -> tuple[str, list[str]]:
     """Install a systemd timer that pulls origin/<branch> and redeploys.
 
     Returns a ``(summary, warnings)`` tuple.  The updater fetches the deploy
-    checkout, and on change hard-resets it, runs ``uv sync``, re-chowns the tree
-    to *run_as_user*, and restarts *restart_service*.
+    checkout, and on change hard-resets it, runs ``uv sync`` (with any
+    *extras*, e.g. ``("display",)``, so optional dependencies survive an
+    update), re-chowns the tree to *run_as_user*, and restarts *restart_service*.
     """
     warnings: list[str] = []
 
@@ -139,6 +141,7 @@ def install_github_autoupdate(
             ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
             check=False,
         )
+        extras_str = "".join(f"--extra {e} " for e in extras)
         write_exec(
             _UPDATE_SCRIPT,
             _UPDATE_SCRIPT_TEMPLATE.format(
@@ -147,6 +150,7 @@ def install_github_autoupdate(
                 uv=uv,
                 user=run_as_user,
                 service=restart_service,
+                extras=extras_str,
             ),
         )
         _UPDATE_SERVICE.write_text(
