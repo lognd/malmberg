@@ -18,10 +18,10 @@ _VIDEO_EXTS = frozenset(
 
 # EXIF tag IDs we care about, resolved by name for readability.
 _TAG_BY_NAME = {v: k for k, v in ExifTags.TAGS.items()}
-_TAG_DATETIME_ORIGINAL = _TAG_BY_NAME.get("DateTimeOriginal")
+_TAG_DATETIME_ORIGINAL = _TAG_BY_NAME.get("DateTimeOriginal")  # 36867 (Exif sub-IFD)
+_TAG_DATETIME = _TAG_BY_NAME.get("DateTime")  # 306 (IFD0 fallback)
 _TAG_MAKE = _TAG_BY_NAME.get("Make")
 _TAG_MODEL = _TAG_BY_NAME.get("Model")
-_GPS_INFO = _TAG_BY_NAME.get("GPSInfo")
 _GPS_TAGS = {v: k for k, v in ExifTags.GPSTAGS.items()}
 
 
@@ -53,9 +53,12 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
     try:
         img = Image.open(path)
         width, height = img.size
-        # getexif() is the public Pillow 6+ API; returns an empty Exif object if absent.
+        # getexif() returns the top-level IFD0 (Make/Model/DateTime/Orientation).
+        # DateTimeOriginal and GPS live in dedicated sub-IFDs, fetched separately.
         exif_obj = img.getexif()
         raw_exif = dict(exif_obj) if exif_obj else {}
+        exif_ifd = _safe_ifd(exif_obj, ExifTags.IFD.Exif)
+        gps_ifd = _safe_ifd(exif_obj, ExifTags.IFD.GPSInfo)
     except UnidentifiedImageError:
         return Err(IngestError.ExifError)
     except OSError:
@@ -68,12 +71,18 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
     lat: float | None = None
     lon: float | None = None
 
-    if raw_exif:
-        if _TAG_DATETIME_ORIGINAL and (raw := raw_exif.get(_TAG_DATETIME_ORIGINAL)):
+    if raw_exif or exif_ifd:
+        # Prefer DateTimeOriginal (Exif sub-IFD); fall back to IFD0 DateTime.
+        raw_dt = None
+        if _TAG_DATETIME_ORIGINAL:
+            raw_dt = exif_ifd.get(_TAG_DATETIME_ORIGINAL)
+        if raw_dt is None and _TAG_DATETIME:
+            raw_dt = raw_exif.get(_TAG_DATETIME)
+        if isinstance(raw_dt, str):
             try:
-                taken_at = datetime.strptime(raw, "%Y:%m:%d %H:%M:%S").replace(
-                    tzinfo=timezone.utc
-                )
+                taken_at = datetime.strptime(
+                    raw_dt.strip(), "%Y:%m:%d %H:%M:%S"
+                ).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 
@@ -82,8 +91,8 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
         if make or model_str:
             camera_model = f"{make} {model_str}".strip() if make else model_str
 
-        if _GPS_INFO and (gps_data := raw_exif.get(_GPS_INFO)):
-            lat, lon = _parse_gps(gps_data)
+        if gps_ifd:
+            lat, lon = _parse_gps(gps_ifd)
 
     return Ok(
         MediaMetadata(
@@ -96,6 +105,14 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
             sha256=digest,
         )
     )
+
+
+def _safe_ifd(exif_obj: object, ifd_id: object) -> dict:
+    """Return the requested EXIF sub-IFD as a dict, or {} if unavailable."""
+    try:
+        return dict(exif_obj.get_ifd(ifd_id))  # type: ignore[attr-defined]
+    except Exception:
+        return {}
 
 
 def _parse_gps(gps_data: dict) -> tuple[float | None, float | None]:
