@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+import malmberg_server.ingest.media as media_mod
 from malmberg_core.models import MediaItem, MediaMetadata
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import (
     META_SCHEMA_VERSION,
     extract_exif,
     make_thumbnail,
+    reverse_geocode,
     sha256_of_file,
 )
 from malmberg_server.ingest.store import MediaStore
@@ -85,6 +88,35 @@ def test_extract_exif_plain_png(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# reverse_geocode
+# ---------------------------------------------------------------------------
+
+
+def test_reverse_geocode_known_coordinate() -> None:
+    """A known Tampa-area coordinate resolves to a plausible Florida label."""
+    pytest.importorskip("reverse_geocoder")
+    media_mod._geocoder = None  # force a fresh import attempt
+    place = reverse_geocode(27.98, -82.82)
+    assert place is not None
+    assert "Florida" in place or "FL" in place or "US" in place
+
+
+def test_reverse_geocode_none_coords() -> None:
+    assert reverse_geocode(None, None) is None
+    assert reverse_geocode(1.0, None) is None
+
+
+def test_reverse_geocode_missing_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulate the geocode extra not being installed: best-effort None, no raise."""
+    media_mod._geocoder = None
+    monkeypatch.setitem(sys.modules, "reverse_geocoder", None)
+    try:
+        assert reverse_geocode(27.98, -82.82) is None
+    finally:
+        media_mod._geocoder = None
+
+
+# ---------------------------------------------------------------------------
 # MediaStore
 # ---------------------------------------------------------------------------
 
@@ -145,6 +177,76 @@ def test_store_stats_by_month() -> None:
     stats = s.stats()
     assert stats["by_year"] == {"2006": 3, "2024": 1}
     assert stats["by_month"] == {"2006-03": 2, "2006-07": 1, "2024-01": 1}
+
+
+def test_store_matches_query_place() -> None:
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(sha256="h1", place="Tampa, Florida, US"),
+        )
+    )
+    s.add(_make_item(filename="b.jpg", server_path="p/b.jpg"))
+    page = s.list(q="tampa")
+    assert page.total == 1
+    assert page.items[0].filename == "a.jpg"
+
+
+def test_store_stats_by_place() -> None:
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(sha256="h1", place="Tampa, Florida, US"),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(sha256="h2", place="Tampa, Florida, US"),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="c.jpg",
+            server_path="p/c.jpg",
+            meta=MediaMetadata(sha256="h3", place="Orlando, Florida, US"),
+        )
+    )
+    s.add(_make_item(filename="d.jpg", server_path="p/d.jpg"))
+    stats = s.stats()
+    assert stats["by_place"] == {
+        "Tampa, Florida, US": 2,
+        "Orlando, Florida, US": 1,
+    }
+
+
+def test_store_places_autocomplete() -> None:
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(sha256="h1", place="Tampa, Florida, US"),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(sha256="h2", place="Orlando, Florida, US"),
+        )
+    )
+    assert s.places(q="tam") == ["Tampa, Florida, US"]
+    assert set(s.places(q="florida")) == {
+        "Tampa, Florida, US",
+        "Orlando, Florida, US",
+    }
+    assert s.places(q="nowhere") == []
 
 
 def test_store_patch_not_found() -> None:

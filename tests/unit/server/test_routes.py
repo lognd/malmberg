@@ -306,6 +306,81 @@ def test_stats_after_upload(client: TestClient) -> None:
     assert data["videos"] == 0
 
 
+def test_media_search_by_place(client: TestClient, tmp_path: Path) -> None:
+    from malmberg_core.models import MediaItem, MediaMetadata
+    from malmberg_server.api.routes import build_app
+    from malmberg_server.ingest.store import MediaStore
+
+    store = MediaStore()
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="beach.jpg",
+            server_path="2024/01/01/beach.jpg",
+            meta=MediaMetadata(sha256="h1", place="Tampa, Florida, US"),
+        )
+    )
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="mountain.jpg",
+            server_path="2024/01/01/mountain.jpg",
+            meta=MediaMetadata(sha256="h2", place="Denver, Colorado, US"),
+        )
+    )
+    cfg = ServerConfig(fs_root=tmp_path)
+    for d in ("media", "uploads", "cloud", ".trash", "logs"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    c = TestClient(build_app(cfg, store=store))
+
+    r = c.get("/media", params={"q": "tampa"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    assert data["items"][0]["filename"] == "beach.jpg"
+
+    r_stats = c.get("/stats")
+    assert r_stats.json()["by_place"] == {
+        "Tampa, Florida, US": 1,
+        "Denver, Colorado, US": 1,
+    }
+
+
+def test_places_autocomplete(client: TestClient, tmp_path: Path) -> None:
+    from malmberg_core.models import MediaItem, MediaMetadata
+    from malmberg_server.api.routes import build_app
+    from malmberg_server.ingest.store import MediaStore
+
+    store = MediaStore()
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="beach.jpg",
+            server_path="2024/01/01/beach.jpg",
+            meta=MediaMetadata(sha256="h1", place="Tampa, Florida, US"),
+        )
+    )
+    store.add(
+        MediaItem(
+            kind="image",
+            filename="mountain.jpg",
+            server_path="2024/01/01/mountain.jpg",
+            meta=MediaMetadata(sha256="h2", place="Orlando, Florida, US"),
+        )
+    )
+    cfg = ServerConfig(fs_root=tmp_path)
+    for d in ("media", "uploads", "cloud", ".trash", "logs"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    c = TestClient(build_app(cfg, store=store))
+
+    r = c.get("/places", params={"q": "tam"})
+    assert r.status_code == 200
+    assert r.json() == ["Tampa, Florida, US"]
+
+    r_all = c.get("/places", params={"q": "florida"})
+    assert set(r_all.json()) == {"Tampa, Florida, US", "Orlando, Florida, US"}
+
+
 def test_media_search_by_filename(client: TestClient) -> None:
     client.post("/upload", files={"file": ("beach.jpg", b"aaa", "image/jpeg")})
     client.post("/upload", files={"file": ("mountain.jpg", b"bbb", "image/jpeg")})

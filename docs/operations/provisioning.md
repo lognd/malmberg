@@ -56,6 +56,12 @@ cd /opt/malmberg
 sudo uv sync
 sudo chown -R malmberg:malmberg /opt/malmberg
 
+# Optional: offline reverse geocoding, so ingested photos with GPS EXIF get a
+# human-readable meta.place (used by location search/stats/autocomplete).
+# Not installed by default -- pulls in numpy/scipy. Server-only; never install
+# this on the Pi display.
+sudo uv sync --extra geocode
+
 # Make uv available to root and the auto-updater:
 sudo cp "$(command -v uv)" /usr/local/bin/uv
 

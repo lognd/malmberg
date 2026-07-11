@@ -182,6 +182,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--muted);
   }
   .month-chip b { color: var(--aqua); font-weight: 700; }
+  /* By-place breakdown, same chip look as by-year */
+  #by-place {
+    margin-top: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .place-chip {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.25rem 0.7rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .place-chip b { color: var(--aqua); font-weight: 700; }
+  #place-search-row #place-input { flex: 1 1 auto; }
   /* Upload section */
   #dropzone {
     border: 2px dashed var(--border);
@@ -1057,6 +1075,22 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <div class="stats-grid" id="stats-grid"></div>
       <div id="by-year"></div>
       <div id="by-month"></div>
+      <div id="by-place"></div>
+    </section>
+
+    <section>
+      <h2>Find a place</h2>
+      <div class="search-row" id="place-search-row">
+        <input id="place-input" type="text" autocomplete="off"
+          list="place-suggestions"
+          placeholder="Type a place, e.g. Tampa">
+        <datalist id="place-suggestions"></datalist>
+        <button id="place-play-btn" type="button">Play this place</button>
+      </div>
+      <div class="domain-sub" id="place-hint">
+        Selecting a place filters the browse grid below and can play just
+        those photos on the frame.
+      </div>
     </section>
 
     <section>
@@ -1075,7 +1109,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <h2>Browse photos</h2>
       <div class="search-row">
         <input id="search-input" type="text"
-          placeholder="Search by filename or year (e.g. 2006)">
+          placeholder="Search by filename, year, or place (e.g. 2006 or Tampa)">
         <button id="refresh-btn" type="button">Refresh</button>
         <button id="select-toggle-btn" type="button">Select</button>
       </div>
@@ -1219,6 +1253,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var statsGrid = document.getElementById("stats-grid");
   var byYear = document.getElementById("by-year");
   var byMonth = document.getElementById("by-month");
+  var byPlace = document.getElementById("by-place");
   var MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -1285,6 +1320,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           group.appendChild(yearEl);
           group.appendChild(monthsEl);
           byMonth.appendChild(group);
+        });
+        byPlace.innerHTML = "";
+        var byPlaceData = data.by_place || {};
+        Object.keys(byPlaceData).forEach(function (place) {
+          var chip = document.createElement("span");
+          chip.className = "place-chip";
+          chip.innerHTML = "<b></b> ";
+          chip.querySelector("b").textContent = String(byPlaceData[place]);
+          chip.appendChild(document.createTextNode(place));
+          chip.title = "Search and browse " + place;
+          chip.addEventListener("click", function () {
+            searchInput.value = place;
+            state.q = place;
+            state.page = 1;
+            loadGrid();
+            placeInput.value = place;
+          });
+          byPlace.appendChild(chip);
         });
       })
       .catch(function () {
@@ -1813,6 +1866,59 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       loadGrid();
     }, 350);
   });
+
+  /* ---- Location autocomplete + "play this place" ---- */
+  var placeInput = document.getElementById("place-input");
+  var placeSuggestions = document.getElementById("place-suggestions");
+  var placePlayBtn = document.getElementById("place-play-btn");
+  var placeDebounce = null;
+
+  function loadPlaceSuggestions(prefix) {
+    fetch("/places?q=" + encodeURIComponent(prefix) + "&limit=10")
+      .then(function (r) { return r.json(); })
+      .then(function (places) {
+        placeSuggestions.innerHTML = "";
+        (places || []).forEach(function (place) {
+          var opt = document.createElement("option");
+          opt.value = place;
+          placeSuggestions.appendChild(opt);
+        });
+      })
+      .catch(function () {});
+  }
+
+  placeInput.addEventListener("input", function () {
+    var value = placeInput.value;
+    if (placeDebounce) window.clearTimeout(placeDebounce);
+    placeDebounce = window.setTimeout(function () {
+      loadPlaceSuggestions(value.trim());
+      // Also drive the main browse grid so typing a place filters photos,
+      // same as typing in the filename/year search box.
+      searchInput.value = value;
+      state.q = value.trim();
+      state.page = 1;
+      loadGrid();
+    }, 350);
+  });
+
+  placePlayBtn.addEventListener("click", function () {
+    var place = placeInput.value.trim();
+    if (!place) {
+      showToast("Type a place first.", "err");
+      return;
+    }
+    runControl(
+      placePlayBtn,
+      "/control/play-query?q=" + encodeURIComponent(place) + "&loop=" + isLoop(),
+      "POST",
+      undefined,
+      "...",
+      loopNote('Now showing photos from "' + place + '".')
+    );
+  });
+
+  // Populate suggestions once on load so the datalist isn't empty on first focus.
+  loadPlaceSuggestions("");
 
   pagePrev.addEventListener("click", function () {
     if (state.page > 1) {
@@ -2384,6 +2490,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (bulkAddPlaylistBtn) bulkAddPlaylistBtn.style.display = "none";
     var actAddPlaylistBtn = document.getElementById("act-add-playlist");
     if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
+    // "Play this place" uses /control/play-query, a server-only proxy path
+    // (like the year-filter shortcuts); hide it on the display's own page.
+    var placePlayBtnEl = document.getElementById("place-play-btn");
+    if (placePlayBtnEl) placePlayBtnEl.style.display = "none";
   }
 
   loadStats();

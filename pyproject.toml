@@ -58,6 +58,9 @@ cloud-googlephotos = [
 privacy = [
     "ultralytics>=8.0.0",
 ]
+geocode = [
+    "reverse_geocoder>=1.5.1",
+]
 all = [
     "malmberg[display,web-overlays]",
 ]

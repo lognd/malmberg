@@ -97,6 +97,26 @@ def test_proxy_list_media_forwards_to_server() -> None:
     assert "page=2" in seen["url"]
 
 
+def test_proxy_places_forwards_to_server() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json=["Tampa, Florida, US"])
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.get("/places", params={"q": "tam"})
+    assert r.status_code == 200
+    assert r.json() == ["Tampa, Florida, US"]
+    assert seen["url"].startswith("http://server.local:8444/places")
+    assert "q=tam" in seen["url"]
+
+
+def test_proxy_places_503_when_unpaired() -> None:
+    assert _client().get("/places").status_code == 503
+
+
 def test_proxy_media_thumb_streams_bytes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/media/xyz/thumb"

@@ -218,8 +218,9 @@ class MediaStore:
         ``meta.ingest_at``). If *media_root* is given, items on the returned
         page with stale metadata are refreshed in place before being served.
         *q*, if given, filters to items whose filename contains *q*
-        (case-insensitive), or whose ``meta.taken_at`` year equals *q* when
-        *q* is a 4-digit year.
+        (case-insensitive), whose ``meta.taken_at`` year equals *q* when *q*
+        is a 4-digit year, or whose ``meta.place`` contains *q*
+        (case-insensitive).
         """
         all_items = [
             it
@@ -320,7 +321,9 @@ class MediaStore:
         ``undated`` (items with no ``meta.taken_at``), ``earliest``,
         ``latest`` (ISO-8601 strings or None), ``by_year`` (a dict of
         4-digit year string -> count) and ``by_month`` (a dict of
-        ``YYYY-MM`` string -> count), both for dated items only.
+        ``YYYY-MM`` string -> count), both for dated items only, and
+        ``by_place`` (a dict of place label -> count, for items with a
+        ``meta.place``, sorted by count descending).
         """
         items = [
             it
@@ -338,6 +341,10 @@ class MediaStore:
             by_year[year] = by_year.get(year, 0) + 1
             month = f"{dt.year:04d}-{dt.month:02d}"
             by_month[month] = by_month.get(month, 0) + 1
+        by_place: dict[str, int] = {}
+        for it in items:
+            if it.meta.place:
+                by_place[it.meta.place] = by_place.get(it.meta.place, 0) + 1
         return {
             "total": len(items),
             "images": images,
@@ -347,11 +354,24 @@ class MediaStore:
             "latest": max(dated).isoformat() if dated else None,
             "by_year": dict(sorted(by_year.items())),
             "by_month": dict(sorted(by_month.items())),
+            "by_place": dict(sorted(by_place.items(), key=lambda kv: (-kv[1], kv[0]))),
         }
+
+    def places(
+        self, *, q: str = "", limit: int = 10, skip_hidden: bool = True
+    ) -> list[str]:
+        """Return distinct place labels whose text contains *q* (case-insensitive),
+        most-common first, capped at *limit*. Used for search autocomplete.
+        """
+        counts = self.stats(skip_hidden=skip_hidden)["by_place"]
+        needle = q.strip().lower()
+        matches = [name for name in counts if needle in name.lower()]
+        # counts is already sorted by count desc, name asc; preserve that order.
+        return matches[:limit]
 
     @staticmethod
     def _matches_query(item: MediaItem, q: str) -> bool:
-        """Return True if *item* matches search query *q* (filename or year)."""
+        """Return True if *item* matches search query *q* (filename, year, or place)."""
         needle = q.strip().lower()
         if needle in item.filename.lower():
             return True
@@ -361,6 +381,8 @@ class MediaStore:
             and item.meta.taken_at is not None
             and str(item.meta.taken_at.year) == needle
         ):
+            return True
+        if item.meta.place is not None and needle in item.meta.place.lower():
             return True
         return False
 

@@ -118,6 +118,7 @@ schema change never requires a manual re-ingest of existing files.
 | `page` | int | `1` | >= 1 | Page number (1-based) |
 | `page_size` | int | `50` | 1--500 | Items per page |
 | `sort` | str | `"id"` | `"id"` \| `"recent"` | `"recent"` orders newest first by `meta.taken_at`, falling back to `meta.ingest_at` |
+| `q` | str | none | -- | Filters to items whose `filename` contains *q* (case-insensitive), whose `meta.taken_at` year equals *q* when *q* is a 4-digit year, or whose `meta.place` contains *q* (case-insensitive) |
 
 **Response: `MediaPage`**
 
@@ -145,6 +146,23 @@ byte stream returned).
 
 **Errors:**
 - `404` -- item not found in the index, or the file is missing from disk
+
+---
+
+### `GET /places`
+
+Autocomplete: distinct `meta.place` labels containing a prefix/substring,
+most-common first. Backs the dashboard's location search-as-you-type
+suggestions.
+
+**Query parameters**
+
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| `q` | str | `""` | -- | Case-insensitive substring filter |
+| `limit` | int | `10` | 1--50 | Maximum number of suggestions returned |
+
+**Response:** `list[str]` -- place labels, e.g. `["Tampa, Florida, US"]`.
 
 ---
 
@@ -373,6 +391,7 @@ passed through unchanged.
 | `camera_model` | str \| null | Camera make and model from EXIF |
 | `lat` | float \| null | GPS latitude in decimal degrees (positive = north) |
 | `lon` | float \| null | GPS longitude in decimal degrees (positive = east) |
+| `place` | str \| null | Human-readable place label reverse-geocoded from `lat`/`lon` offline on the server, e.g. `"Tampa, Florida, US"` (city, region, country code); null when there is no GPS fix or the `geocode` extra is not installed. Never populated via an online lookup -- see "Reverse geocoding (place names)" below. |
 | `width` | int \| null | Image width in pixels |
 | `height` | int \| null | Image height in pixels |
 | `duration_s` | float \| null | Video duration in seconds; null for images |
@@ -398,6 +417,31 @@ retried on the next read.
 To add a new metadata field: add it to `MediaMetadata`, populate it in
 `extract_exif`, and bump `META_SCHEMA_VERSION` by one. Existing items
 self-heal the next time they are read.
+
+`META_SCHEMA_VERSION` is currently `2` (bumped from `1` to add `meta.place`;
+see below).
+
+---
+
+### Reverse geocoding (place names)
+
+GPS-tagged photos (`meta.lat`/`meta.lon`, currently populated for iPhone
+photos only -- most older cameras carry no GPS EXIF) are turned into a
+human-readable `meta.place` label entirely offline, on the server, at ingest
+time (`malmberg_server.ingest.media.reverse_geocode`). This never makes an
+online request: it is a **best-effort** lookup against the `reverse_geocoder`
+package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
+
+- `reverse_geocoder` (which pulls in `numpy`/`scipy`) is **not** a base
+  dependency -- it lives under a dedicated `geocode` optional extra in
+  `pyproject.toml`, installed on the server only with
+  `uv sync --extra geocode`. The Pi display never installs it.
+- The import is best-effort (`try`/`except ImportError`): if the extra is not
+  installed, `reverse_geocode` logs a warning once and returns `None` forever
+  after -- ingestion and metadata refresh are unaffected, `meta.place` just
+  stays `null`.
+- `meta.place` feeds `GET /media?q=`, `GET /stats` (`by_place`), and
+  `GET /places` (autocomplete) -- see those endpoints above.
 
 ---
 
@@ -530,6 +574,7 @@ below responds `503`.
 | `GET /media/{id}` | `GET /media/{id}` (streamed -- used for the in-dashboard `<video>` player too) |
 | `GET /media/{id}/info` | `GET /media/{id}/info` |
 | `GET /stats` | `GET /stats` |
+| `GET /places` | `GET /places` (query params passed through) |
 | `DELETE /media/{id}` | `DELETE /media/{id}` (`?permanent=` passed through) |
 | `POST /media/{id}/restore` | `POST /media/{id}/restore` |
 | `POST /media/bulk-delete` | `POST /media/bulk-delete` |

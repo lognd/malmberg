@@ -218,8 +218,16 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
 
     @app.get("/stats")
     async def media_stats() -> dict:
-        """Report library-wide counts, date range, and per-year distribution."""
+        """Report library-wide counts, date range, and per-year/place distribution."""
         return _store.stats()
+
+    @app.get("/places")
+    async def list_places(
+        q: str = Query(default=""),
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> list[str]:
+        """Autocomplete: distinct place labels containing *q*, most-common first."""
+        return _store.places(q=q, limit=limit)
 
     @app.get("/media/trash")
     async def list_trash(

@@ -21,6 +21,11 @@ class MediaMetadata(BaseModel):
     camera_model: Optional[str] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
+    place: Optional[str] = None
+    """Human-readable place label reverse-geocoded from lat/lon offline on the
+    server (e.g. "Tampa, Florida, US"); None when there is no GPS fix or the
+    geocoder is unavailable. Never populated online -- see
+    malmberg_server.ingest.media.reverse_geocode."""
     width: Optional[int] = None
     height: Optional[int] = None
     duration_s: Optional[float] = None

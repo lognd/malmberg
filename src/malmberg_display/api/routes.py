@@ -378,6 +378,11 @@ def build_app(
         """Proxy: library-wide stats (counts, date range, by-year) from the server."""
         return await _proxy_json("GET", "/stats")
 
+    @app.get("/places")
+    async def proxy_places(request: Request) -> object:
+        """Proxy: place-name autocomplete suggestions from the paired server."""
+        return await _proxy_json("GET", "/places", params=dict(request.query_params))
+
     @app.delete("/media/{item_id}")
     async def proxy_delete_media(
         item_id: str, permanent: bool = Query(default=False)

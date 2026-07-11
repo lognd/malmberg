@@ -46,14 +46,62 @@ _VIDEO_EXTS = frozenset(
 # shorter than this just get their first decodable frame instead.
 _POSTER_FRAME_OFFSET_S = 2.0
 
-META_SCHEMA_VERSION = 1
+META_SCHEMA_VERSION = 2
 """Current MediaMetadata schema version stamped by extract_exif.
 
 Bump this whenever a field is added to MediaMetadata that requires
 re-reading the source file to populate. Items with a stale
 meta.schema_version are transparently re-extracted on next read (see
 MediaStore) so no manual re-ingest is ever required.
+
+Version history:
+  1 -> 2: added meta.place (offline reverse geocode of lat/lon).
 """
+
+_geocoder = None
+"""Lazily-imported reverse_geocoder module handle, or False once import has
+been tried and failed. None means "not yet attempted"."""
+
+
+def reverse_geocode(lat: float | None, lon: float | None) -> str | None:
+    """Best-effort offline reverse geocode of (*lat*, *lon*) to a place label.
+
+    Uses the optional `reverse_geocoder` package (offline, bundled cities
+    dataset; part of the `geocode` extra -- NOT a base dependency, and never
+    installed on the display/Pi). Returns None if coordinates are missing,
+    the package is not installed, or lookup fails for any reason -- this
+    must never raise or block ingestion. Runs a single lookup at a time
+    (mode=1) to avoid reverse_geocoder's default multiprocessing pool, which
+    is unnecessary overhead for one-off single-photo lookups.
+    """
+    global _geocoder
+    if lat is None or lon is None:
+        return None
+    if _geocoder is False:
+        return None
+    if _geocoder is None:
+        try:
+            import reverse_geocoder as rg
+
+            _geocoder = rg
+        except ImportError:
+            _log.warning(
+                "reverse_geocoder unavailable; photo places will not be "
+                "populated (install the 'geocode' extra on the server)"
+            )
+            _geocoder = False
+            return None
+    try:
+        result = _geocoder.get((lat, lon), mode=1)
+        city = (result.get("name") or "").strip()
+        region = (result.get("admin1") or "").strip()
+        country = (result.get("cc") or "").strip()
+        parts = [p for p in (city, region, country) if p]
+        return ", ".join(parts) if parts else None
+    except Exception:
+        _log.warning("reverse_geocode failed for (%s, %s)", lat, lon, exc_info=True)
+        return None
+
 
 # EXIF tag IDs we care about, resolved by name for readability.
 _TAG_BY_NAME = {v: k for k, v in ExifTags.TAGS.items()}
@@ -133,12 +181,15 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
         if gps_ifd:
             lat, lon = _parse_gps(gps_ifd)
 
+    place = reverse_geocode(lat, lon)
+
     return Ok(
         MediaMetadata(
             taken_at=taken_at,
             camera_model=camera_model,
             lat=lat,
             lon=lon,
+            place=place,
             width=width,
             height=height,
             sha256=digest,
