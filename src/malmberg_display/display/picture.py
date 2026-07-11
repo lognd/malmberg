@@ -144,6 +144,9 @@ class PictureDisplay(Displayable):
             ctx.overlay_renderer.render(ctx.screen, w, h, caption)
 
         pygame.display.flip()
+        # Snapshot the finished frame so the toast task can repaint over it and
+        # cleanly restore it when the toast expires.
+        ctx.base_frame = ctx.screen.copy()
 
         dwell = (
             self._dwell_override_s

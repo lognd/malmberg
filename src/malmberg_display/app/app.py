@@ -20,6 +20,7 @@ from malmberg_display.display.overlay import (
     make_geocoder,
 )
 from malmberg_display.display.proto import DisplayContext, LoadContext
+from malmberg_display.display.toast import Toast
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.directory import load_flat_from_directory
 from malmberg_display.slideshow.producers.infinite import (
@@ -97,8 +98,9 @@ class DisplayApp:
 
             from malmberg_display.api.routes import build_app  # local to break cycle
 
+            toast = Toast()
             uvi_cfg = uvicorn.Config(
-                build_app(slideshow),
+                build_app(slideshow, toast=toast),
                 host=self._cfg.host,
                 port=self._cfg.port,
                 ssl_keyfile=None,
@@ -119,6 +121,9 @@ class DisplayApp:
                     tg.create_task(self._pump_events(), name="events")
                     tg.create_task(
                         self._status_task(slideshow, display_ctx), name="status"
+                    )
+                    tg.create_task(
+                        self._toast_task(display_ctx, toast), name="toast"
                     )
                 if discovery_mode:
                     tg.create_task(
@@ -163,6 +168,36 @@ class DisplayApp:
                     _log.info("Display window received QUIT.")
                     return
             await asyncio.sleep(0.05)
+
+    async def _toast_task(self, display_ctx: Any, toast: Toast) -> None:
+        """Paint the active toast over the current frame, and clear it on expiry.
+
+        Repaints ~10x/s while a toast is active so it appears immediately after a
+        control tap, then repaints the base frame once to erase it. Only touches
+        the screen when a message is (or just was) active, so it does not fight
+        the slideshow during normal playback.
+        """
+        import pygame  # noqa: PLC0415 -- hardware-optional import deferred to runtime
+
+        screen = display_ctx.screen
+        renderer = display_ctx.overlay_renderer
+        if screen is None or renderer is None:
+            return
+        was_active = False
+        while True:
+            active = toast.active
+            base = display_ctx.base_frame
+            if active and base is not None:
+                screen.blit(base, (0, 0))
+                renderer.render_toast(
+                    screen, display_ctx.width, display_ctx.height, toast.message
+                )
+                pygame.display.flip()
+            elif was_active and not active and base is not None:
+                screen.blit(base, (0, 0))
+                pygame.display.flip()
+            was_active = active
+            await asyncio.sleep(0.1 if active else 0.25)
 
     async def _status_task(self, slideshow: Slideshow, display_ctx: Any) -> None:
         """Paint an animated status message until the first photo appears.

@@ -342,6 +342,32 @@ class OverlayRenderer:
             y += line_h + ls
 
     # ------------------------------------------------------------------
+    # Toast (transient action feedback, bottom-right)
+    # ------------------------------------------------------------------
+
+    def render_toast(
+        self, surface: Any, width: int, height: int, text: str
+    ) -> None:
+        """Draw a transient status message on a glass panel in the bottom-right."""
+        cfg = self._cfg
+        font = _get_font(cfg.font_size_primary, bold=True)
+        tw, th = font.size(text)
+        pad_x, pad_y = 26, 18
+        panel_w = tw + pad_x * 2
+        panel_h = th + pad_y * 2
+        m = cfg.margin
+        panel_x = width - m - panel_w
+        panel_y = height - m - panel_h
+        _glass_panel(
+            surface, panel_x, panel_y, panel_w, panel_h,
+            alpha=min(230, cfg.scrim_alpha + 20), radius=18,
+        )
+        _blit_text_shadow(
+            surface, font, text, (panel_x + pad_x, panel_y + pad_y),
+            self._COLOR_PRIMARY,
+        )
+
+    # ------------------------------------------------------------------
     # Convenience: render both regions in one call
     # ------------------------------------------------------------------
 

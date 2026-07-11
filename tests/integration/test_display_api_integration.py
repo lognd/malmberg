@@ -129,3 +129,19 @@ async def test_pause_state_shared() -> None:
         status = await c.get("/status")
     assert status.json()["paused"] is True
     assert slideshow.is_paused is True
+
+# ---------------------------------------------------------------------------
+# Toast feedback on control actions
+# ---------------------------------------------------------------------------
+
+
+async def test_control_sets_toast() -> None:
+    from malmberg_display.display.toast import Toast
+
+    toast = Toast()
+    app = build_app(_make_slideshow(), toast=toast)
+    async with asgi_client(app) as c:
+        r = await c.post("/slideshow/pause")
+    assert r.status_code == 200
+    assert toast.active
+    assert toast.message == "Paused"

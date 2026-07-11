@@ -31,6 +31,9 @@ class DisplayContext(BaseModel):
 
     screen: Optional[Any] = None
     """pygame.Surface or None if not yet initialized."""
+    base_frame: Optional[Any] = None
+    """Copy of the last fully-rendered frame (image + overlay), for the toast
+    task to repaint over without re-decoding the current item."""
     mpv_player: Optional[Any] = None
     """mpv.MPV instance or None if not yet initialized."""
     overlay_renderer: Optional[Any] = None
