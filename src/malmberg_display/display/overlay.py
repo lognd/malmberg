@@ -270,17 +270,30 @@ class OverlayRenderer:
         panel_y = m
 
         _glass_panel(
-            surface, panel_x, panel_y, panel_w, panel_h,
-            alpha=cfg.scrim_alpha, radius=18,
+            surface,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            alpha=cfg.scrim_alpha,
+            radius=18,
         )
         right = panel_x + pad_x + inner_w
         _blit_text_shadow(
-            surface, time_font, time_label, (right, panel_y + pad_y),
-            self._COLOR_CLOCK, right_align=True,
+            surface,
+            time_font,
+            time_label,
+            (right, panel_y + pad_y),
+            self._COLOR_CLOCK,
+            right_align=True,
         )
         _blit_text_shadow(
-            surface, date_font, date_label, (right, panel_y + pad_y + th + gap),
-            self._COLOR_SECONDARY, right_align=True,
+            surface,
+            date_font,
+            date_label,
+            (right, panel_y + pad_y + th + gap),
+            self._COLOR_SECONDARY,
+            right_align=True,
         )
 
     # ------------------------------------------------------------------
@@ -329,8 +342,13 @@ class OverlayRenderer:
         panel_y = height - m - panel_h
 
         _glass_panel(
-            surface, panel_x, panel_y, panel_w, panel_h,
-            alpha=cfg.scrim_alpha, radius=20,
+            surface,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            alpha=cfg.scrim_alpha,
+            radius=20,
         )
 
         x0 = panel_x + pad_x
@@ -345,9 +363,7 @@ class OverlayRenderer:
     # Toast (transient action feedback, bottom-right)
     # ------------------------------------------------------------------
 
-    def render_toast(
-        self, surface: Any, width: int, height: int, text: str
-    ) -> None:
+    def render_toast(self, surface: Any, width: int, height: int, text: str) -> None:
         """Draw a transient status message on a glass panel in the bottom-right."""
         cfg = self._cfg
         font = _get_font(cfg.font_size_primary, bold=True)
@@ -359,11 +375,19 @@ class OverlayRenderer:
         panel_x = width - m - panel_w
         panel_y = height - m - panel_h
         _glass_panel(
-            surface, panel_x, panel_y, panel_w, panel_h,
-            alpha=min(230, cfg.scrim_alpha + 20), radius=18,
+            surface,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            alpha=min(230, cfg.scrim_alpha + 20),
+            radius=18,
         )
         _blit_text_shadow(
-            surface, font, text, (panel_x + pad_x, panel_y + pad_y),
+            surface,
+            font,
+            text,
+            (panel_x + pad_x, panel_y + pad_y),
             self._COLOR_PRIMARY,
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,6 +161,126 @@ def test_dashboard_page(client: TestClient) -> None:
     assert "file-input" in r.text
     assert 'id="grid"' in r.text
     assert "control-hint" in r.text
+    assert 'MALMBERG_ROLE = "server"' in r.text
+
+
+# ---------------------------------------------------------------------------
+# Recycle bin (trash / restore)
+# ---------------------------------------------------------------------------
+
+
+def test_trash_list_and_restore_round_trip(client: TestClient) -> None:
+    r = client.post("/upload", files={"file": ("bin.jpg", b"trashme", "image/jpeg")})
+    item_id = r.json()["id"]
+
+    d = client.delete(f"/media/{item_id}")
+    assert d.status_code == 200
+    assert d.json()["status"] == "trashed"
+
+    # Excluded from the normal library view...
+    assert client.get("/media").json()["total"] == 0
+    # ...but present in the recycle bin.
+    trash = client.get("/media/trash")
+    assert trash.status_code == 200
+    trash_data = trash.json()
+    assert trash_data["total"] == 1
+    assert trash_data["items"][0]["id"] == item_id
+
+    # A trashed item's thumbnail/original are still fetchable (recycle bin
+    # preview) from the trash location.
+    orig = client.get(f"/media/{item_id}")
+    assert orig.status_code == 200
+    assert orig.content == b"trashme"
+
+    restore = client.post(f"/media/{item_id}/restore")
+    assert restore.status_code == 200
+    assert restore.json()["trashed_at"] is None
+
+    assert client.get("/media").json()["total"] == 1
+    assert client.get("/media/trash").json()["total"] == 0
+
+
+def test_restore_nonexistent(client: TestClient) -> None:
+    r = client.post("/media/does-not-exist/restore")
+    assert r.status_code == 404
+
+
+def test_restore_not_trashed(client: TestClient) -> None:
+    r = client.post("/upload", files={"file": ("keep.jpg", b"keepme", "image/jpeg")})
+    item_id = r.json()["id"]
+    r2 = client.post(f"/media/{item_id}/restore")
+    assert r2.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Self-restart
+# ---------------------------------------------------------------------------
+
+
+def test_admin_restart_triggers_execv(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ack 200 first, then re-exec via os.execv -- captured, never actually run."""
+    from malmberg_server.api import routes as routes_module
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        routes_module.os, "execv", lambda path, argv: calls.append(argv)
+    )
+
+    class _ImmediateLoop:
+        def call_later(self, delay: float, fn) -> None:
+            fn()
+
+    monkeypatch.setattr(
+        routes_module.asyncio, "get_event_loop", lambda: _ImmediateLoop()
+    )
+
+    r = client.post("/admin/restart")
+    assert r.status_code == 200
+    assert r.json()["status"] == "restarting"
+    assert calls == [[sys.executable, "-m", "malmberg_server"]]
+
+
+def test_control_restart_proxies_to_display(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from malmberg_server.api import routes as routes_module
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "restarting"}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *exc) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, json: object = None
+        ) -> _FakeResponse:
+            assert method == "POST"
+            assert url.endswith("/admin/restart")
+            return _FakeResponse()
+
+    monkeypatch.setattr(routes_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    cfg = ServerConfig(fs_root=tmp_path, display_url="http://display.local:8443")
+    for d in ("media", "uploads", "cloud", ".trash", "logs"):
+        (tmp_path / d).mkdir()
+    app_client = TestClient(routes_module.build_app(cfg))
+
+    r = app_client.post("/control/restart")
+    assert r.status_code == 200
+    assert r.json()["status"] == "restarting"
 
 
 def test_stats_empty(client: TestClient) -> None:

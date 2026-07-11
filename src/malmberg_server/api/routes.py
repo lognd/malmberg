@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -14,7 +17,7 @@ from pydantic import BaseModel
 
 from malmberg_core import __version__
 from malmberg_core.logging import get_logger
-from malmberg_core.models import HidePolicy, MediaPage, Tag
+from malmberg_core.models import HidePolicy, MediaItem, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
@@ -35,7 +38,25 @@ _CONTROL_ROUTES = {
     "play-all": ("POST", "/slideshow/all"),
     "show": ("POST", ""),
     "playlist": ("POST", ""),
+    "restart": ("POST", "/admin/restart"),
 }
+
+
+def _schedule_self_restart(module: str) -> None:
+    """Re-exec the current interpreter running *module* shortly after this call.
+
+    Deferred via ``loop.call_later`` so an in-flight HTTP response (e.g. the
+    200 acknowledging the restart request) is flushed to the client before
+    the process image is replaced. Re-exec (rather than os.kill/exit) is
+    used deliberately so this works whether or not a supervisor like systemd
+    is watching the process.
+    """
+
+    def _do_restart() -> None:
+        _log.warning("Restart requested: re-executing %s", module)
+        os.execv(sys.executable, [sys.executable, "-m", module])
+
+    asyncio.get_event_loop().call_later(0.25, _do_restart)
 
 
 class PlaylistCreate(BaseModel):
@@ -120,6 +141,10 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     def _upload_root() -> Path:
         return cfg.fs_root / "uploads"
 
+    def _item_file_root(item: MediaItem) -> Path:
+        """Return the root a trashed-or-live item's file currently lives under."""
+        return _trash_root() if item.trashed_at is not None else _media_root()
+
     def _trash_root() -> Path:
         return cfg.fs_root / ".trash"
 
@@ -144,6 +169,13 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             version=__version__,
             mac=get_mac_address(),
         )
+
+    @app.post("/admin/restart")
+    async def admin_restart() -> dict[str, str]:
+        """Acknowledge, then re-exec this process (see _schedule_self_restart)."""
+        _log.warning("Server restart requested via /admin/restart")
+        _schedule_self_restart("malmberg_server")
+        return {"status": "restarting"}
 
     @app.get("/version")
     async def version() -> VersionInfo:
@@ -189,6 +221,18 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         """Report library-wide counts, date range, and per-year distribution."""
         return _store.stats()
 
+    @app.get("/media/trash")
+    async def list_trash(
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=500),
+    ) -> MediaPage:
+        """List trashed (soft-deleted) items for the recycle bin view.
+
+        Registered ahead of GET /media/{item_id} so the literal "trash"
+        path segment is not swallowed as an item id.
+        """
+        return _store.list_trash(page=page, page_size=page_size)
+
     @app.get("/media/{item_id}")
     async def get_media(item_id: str) -> FileResponse:
         item = _store.get(item_id, media_root=_media_root())
@@ -198,7 +242,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             save = _store.save_to_disk(_index_path())
             if save.is_err:
                 _log.error("Failed to persist media index after metadata refresh")
-        path = _media_root() / item.server_path
+        path = _item_file_root(item) / item.server_path
         if not path.is_file():
             raise HTTPException(status_code=404, detail="File not found on disk")
         return FileResponse(str(path))
@@ -226,7 +270,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Media item not found")
         thumb_path = cfg.fs_root / ".thumbs" / f"{item_id}_{size}.jpg"
         if not thumb_path.is_file():
-            src = _media_root() / item.server_path
+            src = _item_file_root(item) / item.server_path
             if not src.is_file():
                 raise HTTPException(status_code=404, detail="File not found on disk")
             result = make_thumbnail(
@@ -283,15 +327,17 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         """Soft-delete (trash, recoverable) by default; hard-delete if
         *permanent* is true (unlinks the file, not recoverable)."""
         if permanent:
-            result = _store.delete_permanent(item_id, _media_root())
+            result = _store.delete_permanent(item_id, _media_root(), _trash_root())
         else:
             result = _store.delete(item_id, _trash_root(), _media_root())
         if result.is_err:
             _raise_ingest(result.danger_err)
-        # Drop any cached thumbnails for this item so .thumbs never accumulates
-        # orphans as photos are replaced/removed.
-        for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
-            thumb.unlink(missing_ok=True)
+        if permanent:
+            # Drop any cached thumbnails for this item so .thumbs never
+            # accumulates orphans; trashed-but-recoverable items keep their
+            # thumbnail so the recycle bin can still render one.
+            for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
+                thumb.unlink(missing_ok=True)
         save = _store.save_to_disk(_index_path())
         if save.is_err:
             _log.error("Failed to persist media index after delete")
@@ -308,19 +354,31 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         failed: list[str] = []
         for item_id in req.ids:
             if req.permanent:
-                result = _store.delete_permanent(item_id, _media_root())
+                result = _store.delete_permanent(item_id, _media_root(), _trash_root())
             else:
                 result = _store.delete(item_id, _trash_root(), _media_root())
             if result.is_err:
                 failed.append(item_id)
                 continue
             deleted.append(item_id)
-            for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
-                thumb.unlink(missing_ok=True)
+            if req.permanent:
+                for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
+                    thumb.unlink(missing_ok=True)
         save = _store.save_to_disk(_index_path())
         if save.is_err:
             _log.error("Failed to persist media index after bulk delete")
         return {"deleted": deleted, "failed": failed}
+
+    @app.post("/media/{item_id}/restore")
+    async def restore_media(item_id: str) -> dict:
+        """Restore a trashed item: move its file back and clear the trash flag."""
+        result = _store.restore(item_id, _trash_root(), _media_root())
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after restore")
+        return result.danger_ok.model_dump(mode="json")
 
     async def _forward_to_display(
         name: str, *, path_override: Optional[str] = None, json_body: object = None
@@ -399,6 +457,11 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         """Proxy: revert the paired display to showing the whole library."""
         return await _forward_to_display("play-all")
 
+    @app.post("/control/restart")
+    async def control_restart() -> dict:
+        """Proxy: restart the selected paired display's process."""
+        return await _forward_to_display("restart")
+
     @app.post("/control/show/{item_id}")
     async def control_show(item_id: str) -> dict:
         """Proxy: display *item_id* now on the paired display."""
@@ -421,9 +484,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     @app.post("/control/play-query")
     async def control_play_query(q: str = Query(...)) -> dict:
         """Play only the photos matching a search (e.g. a year) on the display."""
-        page = _store.list(
-            page=1, page_size=500, skip_hidden=True, sort="recent", q=q
-        )
+        page = _store.list(page=1, page_size=500, skip_hidden=True, sort="recent", q=q)
         ids = [it.id for it in page.items]
         if not ids:
             raise HTTPException(status_code=404, detail="No photos match that filter")
@@ -473,9 +534,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         return {"name": name, "count": len(result.danger_ok)}
 
     @app.post("/playlists/{name}/items/bulk")
-    async def add_playlist_items_bulk(
-        name: str, body: BulkPlaylistAddRequest
-    ) -> dict:
+    async def add_playlist_items_bulk(name: str, body: BulkPlaylistAddRequest) -> dict:
         """Append multiple item ids to the programmed slideshow *name*."""
         items = _playlists.get(name)
         if items is None:

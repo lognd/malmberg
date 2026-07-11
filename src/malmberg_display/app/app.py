@@ -119,7 +119,11 @@ class DisplayApp:
 
             uvi_cfg = uvicorn.Config(
                 build_app(
-                    slideshow, toast=toast, make_producer=make_server_producer
+                    slideshow,
+                    toast=toast,
+                    make_producer=make_server_producer,
+                    server_url=self._cfg.server_url,
+                    http_client=client,
                 ),
                 host=self._cfg.host,
                 port=self._cfg.port,
@@ -142,9 +146,7 @@ class DisplayApp:
                     tg.create_task(
                         self._status_task(slideshow, display_ctx), name="status"
                     )
-                    tg.create_task(
-                        self._toast_task(display_ctx, toast), name="toast"
-                    )
+                    tg.create_task(self._toast_task(display_ctx, toast), name="toast")
                 if discovery_mode:
                     tg.create_task(
                         self._pairing_task(slideshow, cache_dir),
@@ -283,6 +285,14 @@ class DisplayApp:
             port = payload.get("port", 8444)
             server_url = f"http://{host}:{port}"
             _log.info("Discovered server at %s via UDP", server_url)
+            # Persist the discovered URL so make_server_producer (used by the
+            # /slideshow/show, /slideshow/playlist, and /slideshow/all API
+            # routes) can build server producers after pairing.  Without this,
+            # a display that paired via discovery (rather than an explicit
+            # server_url) 409s on every dashboard control action forever,
+            # since make_server_producer reads self._cfg.server_url and it was
+            # never set here.
+            self._cfg.server_url = server_url
             slideshow.set_producer(
                 async_load_infinite(
                     lambda: ServerProducer(server_url, cache_dir, client).items()

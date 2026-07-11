@@ -130,6 +130,7 @@ async def test_pause_state_shared() -> None:
     assert status.json()["paused"] is True
     assert slideshow.is_paused is True
 
+
 # ---------------------------------------------------------------------------
 # Toast feedback on control actions
 # ---------------------------------------------------------------------------

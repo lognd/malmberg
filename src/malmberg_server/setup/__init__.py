@@ -390,9 +390,7 @@ def _step_zfs_permissions(dry: bool, warnings: list[str]) -> str:
         return "skipped (ZFS unavailable)"
     if not _zfs_dataset_exists(_ZFS_DATASET):
         return f"skipped ({_ZFS_DATASET} absent)"
-    _log.info(
-        "Granting '%s' [%s] on %s.", _SYSTEM_USER, _ZFS_USER_PERMS, _ZFS_DATASET
-    )
+    _log.info("Granting '%s' [%s] on %s.", _SYSTEM_USER, _ZFS_USER_PERMS, _ZFS_DATASET)
     if not dry:
         subprocess.run(
             ["zfs", "allow", _SYSTEM_USER, _ZFS_USER_PERMS, _ZFS_DATASET],
@@ -590,9 +588,7 @@ def _step_arc_limit(dry: bool, warnings: list[str]) -> str:
     if not dry:
         if not _ARC_CONF.is_file() or _ARC_CONF.read_text() != content:
             _ARC_CONF.write_text(content)
-            subprocess.run(
-                ["update-initramfs", "-u"], check=False, capture_output=True
-            )
+            subprocess.run(["update-initramfs", "-u"], check=False, capture_output=True)
         # Apply immediately when the module is already loaded.
         live = Path("/sys/module/zfs/parameters/zfs_arc_max")
         try:
@@ -626,9 +622,7 @@ def _step_esp_mirror(dry: bool, warnings: list[str]) -> str:
     """
     if not _has_cmd("zpool"):
         return "skipped (ZFS unavailable)"
-    status = subprocess.run(
-        ["zpool", "status"], capture_output=True, text=True
-    ).stdout
+    status = subprocess.run(["zpool", "status"], capture_output=True, text=True).stdout
     if "mirror" not in status:
         return "skipped (no mirror vdev)"
     if not _is_mount("/boot/efi"):
@@ -657,9 +651,7 @@ def _step_esp_mirror(dry: bool, warnings: list[str]) -> str:
     return "daily; synced now"
 
 
-def _step_auto_update(
-    args: argparse.Namespace, dry: bool, warnings: list[str]
-) -> str:
+def _step_auto_update(args: argparse.Namespace, dry: bool, warnings: list[str]) -> str:
     """Install a timer that pulls origin/<branch> from GitHub and redeploys."""
     if getattr(args, "no_auto_update", False):
         return "disabled (--no-auto-update)"

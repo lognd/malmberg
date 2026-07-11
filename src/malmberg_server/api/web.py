@@ -19,7 +19,11 @@ area (live display controls) and a "Manage the photo library" area
 
 from __future__ import annotations
 
-DASHBOARD_PAGE_HTML = """<!doctype html>
+from typing import Literal
+
+DashboardRole = Literal["server", "display"]
+
+_DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -447,6 +451,59 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     color: var(--muted);
     margin-bottom: 0.6rem;
   }
+  #restart-row {
+    margin-top: 1.1rem;
+    padding-top: 0.9rem;
+    border-top: 1px dashed var(--border);
+  }
+  .danger-btn {
+    margin-top: 0.5rem;
+    margin-right: 0.5rem;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--err);
+    background: transparent;
+    border: 1px solid var(--err);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0.75;
+  }
+  .danger-btn:hover {
+    opacity: 1;
+  }
+  #trash-panel {
+    display: none;
+    margin-top: 0.6rem;
+  }
+  #trash-panel.show {
+    display: block;
+  }
+  #trash-empty {
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .trash-tile {
+    position: relative;
+  }
+  .trash-tile img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 4px;
+    display: block;
+    opacity: 0.75;
+  }
+  .trash-tile .trash-actions {
+    display: flex;
+    gap: 0.3rem;
+    margin-top: 0.25rem;
+  }
+  .trash-tile button {
+    flex: 1;
+    font-size: 0.72rem;
+    padding: 0.25rem 0.3rem;
+  }
   /* Grid */
   .grid {
     display: grid;
@@ -704,6 +761,14 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     max-height: 45vh;
     display: block;
   }
+  #modal-video {
+    max-width: 100%;
+    max-height: 45vh;
+    display: none;
+  }
+  #modal-video.show {
+    display: block;
+  }
   #modal-body {
     padding: 1rem 1.1rem 1.2rem;
   }
@@ -874,6 +939,15 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       </div>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
       on the server to enable.</div>
+      <div id="restart-row">
+        <div class="yf-label">Trouble? Restart a device</div>
+        <button id="btn-restart-display" type="button" class="danger-btn">
+          Restart display
+        </button>
+        <button id="btn-restart-server" type="button" class="danger-btn">
+          Restart server
+        </button>
+      </div>
     </section>
   </div>
 
@@ -930,7 +1004,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       </div>
     </section>
 
-    <section>
+    <section id="playlists-section">
       <h2>Programmed slideshows</h2>
       <div id="playlists-list"></div>
       <div id="playlists-empty">No programmed slideshows yet.</div>
@@ -938,6 +1012,19 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
         <input id="new-playlist-name" type="text"
           placeholder="New slideshow name">
         <button id="new-playlist-btn" type="button">Create</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Recycle bin</h2>
+      <div class="domain-sub">
+        Photos deleted with "Delete (recoverable)" land here. Restore them,
+        or delete them permanently.
+      </div>
+      <button id="trash-toggle-btn" type="button">Show recycle bin</button>
+      <div id="trash-panel">
+        <div id="trash-empty">Recycle bin is empty.</div>
+        <div class="grid" id="trash-grid"></div>
       </div>
     </section>
   </div>
@@ -950,7 +1037,10 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
 <div id="modal-backdrop">
   <div id="modal-card">
     <button id="modal-close" type="button" aria-label="Close">&times;</button>
-    <div id="modal-img-wrap"><img id="modal-img" alt=""></div>
+    <div id="modal-img-wrap">
+      <img id="modal-img" alt="">
+      <video id="modal-video" controls preload="metadata"></video>
+    </div>
     <div id="modal-body">
       <div id="modal-title"></div>
       <dl class="detail-grid" id="modal-details"></dl>
@@ -972,6 +1062,35 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
 <script>
 (function () {
   "use strict";
+
+  /* ---- Role ----
+     "server": served by the Server, from /dashboard. All calls are relative
+     to the server (library endpoints and /control/* proxies to the paired
+     display).
+     "display": served by the Display itself, from its own /dashboard.
+     Library endpoints (/media*, /stats) are still relative -- the display
+     proxies them to its paired server -- but slideshow controls talk to the
+     display's own /slideshow/* routes directly instead of round-tripping
+     through a server's /control/* proxy. Multi-display selection, the
+     year-filter "play query" shortcut, and programmed slideshows are
+     server-only features and are hidden in this role. */
+  var MALMBERG_ROLE = "__MALMBERG_ROLE__";
+
+  /* Map a server-style /control/* control path to this role's real target. */
+  function mapControlPath(path) {
+    if (MALMBERG_ROLE !== "display") return path;
+    if (path === "/control/status") return "/status";
+    if (path === "/control/next") return "/slideshow/next";
+    if (path === "/control/prev") return "/slideshow/prev";
+    if (path === "/control/pause") return "/slideshow/pause";
+    if (path === "/control/play-all") return "/slideshow/all";
+    if (path === "/control/restart") return "/admin/restart";
+    var showPrefix = "/control/show/";
+    if (path.indexOf(showPrefix) === 0) {
+      return "/slideshow/show/" + path.slice(showPrefix.length);
+    }
+    return path;
+  }
 
   /* ---- Toasts ---- */
   var toastStack = document.getElementById("toast-stack");
@@ -1212,7 +1331,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   }
 
   function refreshStatus() {
-    fetch("/control/status")
+    fetch(mapControlPath("/control/status"))
       .then(function (r) {
         if (r.status === 503) {
           setControlsDisabled(true);
@@ -1297,6 +1416,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
      happened, then refreshes status so the "now showing" area stays
      in sync with the display (which preempts immediately). */
   function runControl(btn, path, method, body, busyText, okMessage) {
+    path = mapControlPath(path);
     var originalText = btn.textContent;
     btn.disabled = true;
     btn.className += " busy";
@@ -1343,6 +1463,28 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     runControl(btnNext, "/control/next", "POST", undefined,
       "...", "Skipped to the next photo.");
   });
+  var btnRestartDisplay = document.getElementById("btn-restart-display");
+  var btnRestartServer = document.getElementById("btn-restart-server");
+
+  btnRestartDisplay.addEventListener("click", function () {
+    if (!window.confirm(
+      "Restart the display now? It will be unavailable for a few seconds."
+    )) return;
+    runControl(btnRestartDisplay, "/control/restart", "POST", undefined,
+      "...", "Restarting the display.");
+  });
+
+  btnRestartServer.addEventListener("click", function () {
+    if (!window.confirm(
+      "Restart the server now? It will be unavailable for a few seconds."
+    )) return;
+    var path = MALMBERG_ROLE === "display"
+      ? "/control/restart-server"
+      : "/admin/restart";
+    runControl(btnRestartServer, path, "POST", undefined,
+      "...", "Restarting the server.");
+  });
+
   btnPause.addEventListener("click", function () {
     var willResume = btnPause.textContent === "Resume";
     runControl(btnPause, "/control/pause", "POST", undefined,
@@ -1763,6 +1905,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   var modalCard = document.getElementById("modal-card");
   var modalClose = document.getElementById("modal-close");
   var modalImg = document.getElementById("modal-img");
+  var modalVideo = document.getElementById("modal-video");
   var modalTitle = document.getElementById("modal-title");
   var modalDetails = document.getElementById("modal-details");
   var actShow = document.getElementById("act-show");
@@ -1809,6 +1952,11 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     modalPlaylistPicker.className = "";
     modalPlaylistPicker.innerHTML = "";
     modalImg.src = "";
+    modalImg.style.display = "";
+    modalVideo.pause();
+    modalVideo.removeAttribute("src");
+    modalVideo.load();
+    modalVideo.className = "";
     modalTitle.textContent = "Loading...";
     modalDetails.innerHTML = "";
     modalBackdrop.className = "show";
@@ -1818,10 +1966,16 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       .then(function (item) {
         modalItem = item;
         modalTitle.textContent = item.filename;
-        modalImg.src = item.kind === "image"
-          ? "/media/" + item.id
-          : "/media/" + item.id + "/thumb?size=800";
-        modalImg.alt = item.filename;
+        if (item.kind === "video") {
+          modalImg.style.display = "none";
+          modalVideo.className = "show";
+          modalVideo.src = "/media/" + item.id;
+        } else {
+          modalVideo.className = "";
+          modalImg.style.display = "";
+          modalImg.src = "/media/" + item.id;
+          modalImg.alt = item.filename;
+        }
 
         modalDetails.innerHTML = "";
         addDetail("Kind", item.kind);
@@ -1861,6 +2015,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   function closeModal() {
     modalBackdrop.className = "";
     modalItem = null;
+    modalVideo.pause();
   }
 
   modalClose.addEventListener("click", closeModal);
@@ -1947,13 +2102,143 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       .catch(function () { showToast("Could not delete item.", "err"); });
   });
 
+  /* ---- Recycle bin ---- */
+  var trashToggleBtn = document.getElementById("trash-toggle-btn");
+  var trashPanel = document.getElementById("trash-panel");
+  var trashGrid = document.getElementById("trash-grid");
+  var trashEmpty = document.getElementById("trash-empty");
+  var trashLoaded = false;
+
+  function renderTrashTile(item) {
+    var tile = document.createElement("div");
+    tile.className = "trash-tile";
+    var img = document.createElement("img");
+    img.src = "/media/" + item.id + "/thumb?size=160";
+    img.alt = item.filename;
+    tile.appendChild(img);
+    var actions = document.createElement("div");
+    actions.className = "trash-actions";
+
+    var restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.textContent = "Restore";
+    restoreBtn.addEventListener("click", function () {
+      restoreBtn.disabled = true;
+      fetch("/media/" + item.id + "/restore", { method: "POST" })
+        .then(function (r) {
+          if (r.ok) {
+            showToast("Restored \\"" + item.filename + "\\".", "ok");
+            loadTrash();
+            loadStats();
+            loadGrid();
+          } else {
+            showToast("Could not restore item.", "err");
+            restoreBtn.disabled = false;
+          }
+        })
+        .catch(function () {
+          showToast("Could not restore item.", "err");
+          restoreBtn.disabled = false;
+        });
+    });
+
+    var deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.textContent = "Delete forever";
+    deleteBtn.addEventListener("click", function () {
+      if (!window.confirm("Permanently delete \\"" + item.filename
+        + "\\"? This CANNOT be undone.")) return;
+      deleteBtn.disabled = true;
+      fetch("/media/" + item.id + "?permanent=true", { method: "DELETE" })
+        .then(function (r) {
+          if (r.ok) {
+            showToast("Permanently deleted \\"" + item.filename + "\\".", "ok");
+            loadTrash();
+          } else {
+            showToast("Could not delete item.", "err");
+            deleteBtn.disabled = false;
+          }
+        })
+        .catch(function () {
+          showToast("Could not delete item.", "err");
+          deleteBtn.disabled = false;
+        });
+    });
+
+    actions.appendChild(restoreBtn);
+    actions.appendChild(deleteBtn);
+    tile.appendChild(actions);
+    return tile;
+  }
+
+  function loadTrash() {
+    fetch("/media/trash?page=1&page_size=100")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        trashGrid.innerHTML = "";
+        var items = data.items || [];
+        trashEmpty.style.display = items.length ? "none" : "block";
+        items.forEach(function (item) {
+          trashGrid.appendChild(renderTrashTile(item));
+        });
+      })
+      .catch(function () { showToast("Could not load recycle bin.", "err"); });
+  }
+
+  trashToggleBtn.addEventListener("click", function () {
+    var show = trashPanel.className.indexOf("show") === -1;
+    trashPanel.className = show ? "show" : "";
+    trashToggleBtn.textContent = show ? "Hide recycle bin" : "Show recycle bin";
+    if (show && !trashLoaded) {
+      trashLoaded = true;
+      loadTrash();
+    } else if (show) {
+      loadTrash();
+    }
+  });
+
+  /* ---- Role-specific UI: hide server-only features when hosted on the
+     display itself (multi-display selection, year-shortcut play-query, and
+     programmed slideshows all live server-side only). ---- */
+  if (MALMBERG_ROLE === "display") {
+    var displaySelectRow = document.getElementById("display-select-row");
+    if (displaySelectRow) displaySelectRow.style.display = "none";
+    var yearFilterRow = document.getElementById("year-filter-row");
+    if (yearFilterRow) yearFilterRow.style.display = "none";
+    var playlistsSection = document.getElementById("playlists-section");
+    if (playlistsSection) playlistsSection.style.display = "none";
+    var bulkAddPlaylistBtn = document.getElementById("bulk-add-playlist");
+    if (bulkAddPlaylistBtn) bulkAddPlaylistBtn.style.display = "none";
+    var actAddPlaylistBtn = document.getElementById("act-add-playlist");
+    if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
+  }
+
   loadStats();
   refreshStatus();
   loadGrid();
-  loadPlaylists();
-  loadYearFilter();
+  if (MALMBERG_ROLE !== "display") {
+    loadPlaylists();
+    loadYearFilter();
+  }
   setInterval(refreshStatus, 5000);
 })();
 </script>
 </body>
 </html>"""
+
+
+def render_dashboard_html(role: DashboardRole = "server") -> str:
+    """Render the single-source dashboard page for *role*.
+
+    The Server and Display both serve this same page (see module docstring)
+    so the two accessors never desync: only a JS-side ``MALMBERG_ROLE``
+    constant differs, which switches whether slideshow controls target a
+    server's /control/* proxy or a display's own /slideshow/* routes
+    directly. Library/browse/recycle-bin calls use the same relative paths
+    in both roles (the display proxies them to its paired server).
+    """
+    return _DASHBOARD_PAGE_TEMPLATE.replace("__MALMBERG_ROLE__", role)
+
+
+DASHBOARD_PAGE_HTML = render_dashboard_html("server")
+"""Pre-rendered server-role page, kept for callers that import the constant."""

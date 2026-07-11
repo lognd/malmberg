@@ -12,6 +12,7 @@ from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import (
     META_SCHEMA_VERSION,
     extract_exif,
+    make_thumbnail,
     sha256_of_file,
 )
 from malmberg_server.ingest.store import MediaStore
@@ -146,8 +147,25 @@ def test_store_delete_trash(tmp_path: Path) -> None:
     result = s.delete(item.id, trash_root, media_root)
     assert result.is_ok
     assert result.danger_ok["status"] == "trashed"
-    assert s.get(item.id) is None
+    # Trashed items stay in the index (recoverable via restore()) but are
+    # excluded from normal list()/stats() views.
+    trashed = s.get(item.id)
+    assert trashed is not None
+    assert trashed.trashed_at is not None
+    assert trashed.trash_path == rel
     assert (trash_root / rel).is_file()
+    assert s.list(skip_hidden=False).total == 0
+    assert s.list_trash().total == 1
+
+    restore_result = s.restore(item.id, trash_root, media_root)
+    assert restore_result.is_ok
+    restored = restore_result.danger_ok
+    assert restored.trashed_at is None
+    assert restored.trash_path is None
+    assert (media_root / rel).is_file()
+    assert not (trash_root / rel).is_file()
+    assert s.list(skip_hidden=False).total == 1
+    assert s.list_trash().total == 0
 
 
 def test_store_delete_keep(tmp_path: Path) -> None:
@@ -292,3 +310,110 @@ def test_store_list_sort_recent() -> None:
     s.add(newer)
     page = s.list(sort="recent")
     assert [it.filename for it in page.items] == ["new.jpg", "old.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# make_thumbnail -- HEIC/HEIF decode, truncated images, video posters
+# ---------------------------------------------------------------------------
+
+
+def test_make_thumbnail_heic(tmp_path: Path) -> None:
+    """A synthesized HEIC file decodes and produces a real JPEG thumbnail."""
+    try:
+        import pillow_heif
+        from PIL import Image
+    except ImportError:
+        pytest.skip("pillow-heif not installed")
+
+    src = tmp_path / "photo.heic"
+    heif = pillow_heif.from_pillow(Image.new("RGB", (40, 30), (200, 50, 10)))
+    heif.save(src, quality=80)
+
+    dest = tmp_path / "thumb.jpg"
+    result = make_thumbnail(src, dest, 32)
+    assert result.is_ok
+    assert dest.is_file()
+
+    out = Image.open(dest)
+    assert out.mode == "RGB"
+    assert max(out.size) <= 32
+
+
+def test_make_thumbnail_truncated_image(tmp_path: Path) -> None:
+    """A partially-written JPEG still produces a thumbnail (LOAD_TRUNCATED_IMAGES)."""
+    from PIL import Image
+
+    full = tmp_path / "full.jpg"
+    Image.new("RGB", (200, 200), (10, 20, 30)).save(full, quality=90)
+    data = full.read_bytes()
+
+    truncated = tmp_path / "truncated.jpg"
+    truncated.write_bytes(data[: len(data) // 2])
+
+    dest = tmp_path / "thumb.jpg"
+    result = make_thumbnail(truncated, dest, 64)
+    assert result.is_ok
+    assert dest.is_file()
+
+
+def test_make_thumbnail_undecodable_image_errs(tmp_path: Path) -> None:
+    """A file that isn't image data at all fails gracefully, not with a crash."""
+    src = tmp_path / "garbage.jpg"
+    src.write_bytes(b"this is not an image")
+    dest = tmp_path / "thumb.jpg"
+    result = make_thumbnail(src, dest, 64)
+    assert result.is_err
+    assert result.danger_err is IngestError.ExifError
+    assert not dest.is_file()
+
+
+def test_make_thumbnail_video_poster_real_frame(tmp_path: Path) -> None:
+    """A real, decodable video yields an actual poster frame, not the placeholder."""
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        pytest.skip("imageio-ffmpeg not installed")
+    import subprocess
+
+    from PIL import Image
+
+    src = tmp_path / "clip.mp4"
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run(
+        [
+            exe,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=3:size=64x64:rate=10",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+        ],
+        capture_output=True,
+        check=True,
+    )
+
+    dest = tmp_path / "thumb.jpg"
+    result = make_thumbnail(src, dest, 128, is_video=True)
+    assert result.is_ok
+    out = Image.open(dest)
+    # The extracted frame is <=64px (source resolution); the drawn placeholder
+    # is always exactly `size` x `size` (128x128), so this distinguishes them.
+    assert out.size != (128, 128)
+
+
+def test_make_thumbnail_video_poster_falls_back_on_bad_file(tmp_path: Path) -> None:
+    """A file that isn't a real video falls back to the drawn placeholder tile."""
+    from PIL import Image
+
+    src = tmp_path / "not_a_video.mp4"
+    src.write_bytes(b"\x00" * 32)
+    dest = tmp_path / "thumb.jpg"
+
+    result = make_thumbnail(src, dest, 96, is_video=True)
+    assert result.is_ok
+
+    out = Image.open(dest)
+    assert out.size == (96, 96)

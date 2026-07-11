@@ -2,16 +2,42 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import sys
 from typing import Callable, Optional
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from malmberg_core import __version__
+from malmberg_core.logging import get_logger
 from malmberg_core.models import Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_display.display.toast import Toast
 from malmberg_display.slideshow.slideshow import ProducerType, Slideshow
+from malmberg_server.api.web import render_dashboard_html
+
+_log = get_logger(__name__)
+
+
+def _schedule_self_restart(module: str) -> None:
+    """Re-exec the current interpreter running *module* shortly after this call.
+
+    Deferred via ``loop.call_later`` so the in-flight HTTP response
+    acknowledging the restart is flushed to the client before the process
+    image is replaced. Re-exec (rather than os.kill/exit) is used
+    deliberately so this works whether or not a supervisor like systemd is
+    watching the process.
+    """
+
+    def _do_restart() -> None:
+        _log.warning("Restart requested: re-executing %s", module)
+        os.execv(sys.executable, [sys.executable, "-m", module])
+
+    asyncio.get_event_loop().call_later(0.25, _do_restart)
 
 
 class DisplayStatus(BaseModel):
@@ -43,9 +69,9 @@ class DisplayHistoryEntry(BaseModel):
 def build_app(
     slideshow: Slideshow,
     toast: Optional[Toast] = None,
-    make_producer: Optional[
-        Callable[..., Optional[ProducerType]]
-    ] = None,
+    make_producer: Optional[Callable[..., Optional[ProducerType]]] = None,
+    server_url: Optional[str] = None,
+    http_client: Optional[httpx.AsyncClient] = None,
 ) -> FastAPI:
     """Build and return the FastAPI application wired to *slideshow*.
 
@@ -54,6 +80,12 @@ def build_app(
     when provided, builds a server producer (optionally for a specific ordered
     list of item ids) so the display can show a single photo or a programmed
     slideshow on demand.
+
+    *server_url* and *http_client*, when both given, enable the display's own
+    GET /dashboard page: a second accessor to the paired server's photo
+    library, hosted on the display itself. Library/browse calls are proxied
+    to the paired server (see ``_forward_media``); slideshow controls hit
+    this app's own /slideshow/* routes directly.
     """
     app = FastAPI(title="Malmberg Display", version=__version__)
     state = {"mode": "all"}
@@ -93,6 +125,13 @@ def build_app(
             history_count=len(slideshow.history),
             mode=state["mode"],
         )
+
+    @app.post("/admin/restart")
+    async def admin_restart() -> dict[str, str]:
+        """Acknowledge, then re-exec this process (see _schedule_self_restart)."""
+        _log.warning("Display restart requested via /admin/restart")
+        _schedule_self_restart("malmberg_display")
+        return {"status": "restarting"}
 
     @app.post("/slideshow/next")
     async def next_item() -> dict[str, str]:
@@ -157,5 +196,137 @@ def build_app(
     @app.get("/history")
     async def history() -> list[DisplayHistoryEntry]:
         return [DisplayHistoryEntry(item_repr=repr(i)) for i in slideshow.history]
+
+    # ------------------------------------------------------------------
+    # Library proxy: lets the display's own /dashboard browse, inspect, and
+    # delete photos on the paired server without the display owning a
+    # MediaStore of its own. Only wired up when both server_url and
+    # http_client are supplied (i.e. the display is in server-paired mode).
+    # ------------------------------------------------------------------
+
+    def _require_server() -> tuple[str, httpx.AsyncClient]:
+        if server_url is None or http_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Display is not paired with a server; library unavailable",
+            )
+        return server_url, http_client
+
+    async def _proxy_json(
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict] = None,
+        json: object = None,
+    ) -> object:
+        """Forward a JSON request to the paired server and return its body.
+
+        Raises HTTPException(503) if unpaired, or 502 if the server could
+        not be reached (mirrors the server's own _forward_to_display).
+        """
+        base, client = _require_server()
+        url = base.rstrip("/") + path
+        try:
+            resp = await client.request(
+                method, url, timeout=10.0, params=params, json=json
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError as exc:
+            _log.error("Failed to reach paired server at %s: %s", url, exc)
+            raise HTTPException(
+                status_code=502, detail="Could not reach paired server"
+            ) from exc
+
+    async def _proxy_stream(path: str, params: Optional[dict] = None) -> Response:
+        """Forward a GET to the paired server and stream the response bytes back."""
+        base, client = _require_server()
+        url = base.rstrip("/") + path
+        try:
+            req = client.build_request("GET", url, params=params, timeout=15.0)
+            resp = await client.send(req, stream=True)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            _log.error("Failed to reach paired server at %s: %s", url, exc)
+            raise HTTPException(
+                status_code=502, detail="Could not reach paired server"
+            ) from exc
+        return StreamingResponse(
+            resp.aiter_bytes(),
+            media_type=resp.headers.get("content-type", "application/octet-stream"),
+            background=resp.aclose,
+        )
+
+    @app.post("/control/restart-server")
+    async def proxy_restart_server() -> object:
+        """Proxy: ask the paired server to restart itself via its /admin/restart."""
+        return await _proxy_json("POST", "/admin/restart")
+
+    @app.get("/media")
+    async def proxy_list_media(request: Request) -> object:
+        """Proxy: list library pages from the paired server (browse grid)."""
+        return await _proxy_json("GET", "/media", params=dict(request.query_params))
+
+    @app.get("/media/trash")
+    async def proxy_list_trash(request: Request) -> object:
+        """Proxy: list trashed (soft-deleted) items from the paired server."""
+        return await _proxy_json(
+            "GET", "/media/trash", params=dict(request.query_params)
+        )
+
+    @app.get("/media/{item_id}/thumb")
+    async def proxy_media_thumb(
+        item_id: str, size: int = Query(default=400, ge=64, le=1024)
+    ) -> Response:
+        """Proxy: stream a thumbnail JPEG from the paired server."""
+        return await _proxy_stream(f"/media/{item_id}/thumb", params={"size": size})
+
+    @app.get("/media/{item_id}")
+    async def proxy_media_file(item_id: str) -> Response:
+        """Proxy: stream the full-resolution original from the paired server."""
+        return await _proxy_stream(f"/media/{item_id}")
+
+    @app.get("/media/{item_id}/info")
+    async def proxy_media_info(item_id: str) -> object:
+        """Proxy: fetch full MediaItem JSON (details modal) from the paired server."""
+        return await _proxy_json("GET", f"/media/{item_id}/info")
+
+    @app.get("/stats")
+    async def proxy_stats() -> object:
+        """Proxy: library-wide stats (counts, date range, by-year) from the server."""
+        return await _proxy_json("GET", "/stats")
+
+    @app.delete("/media/{item_id}")
+    async def proxy_delete_media(
+        item_id: str, permanent: bool = Query(default=False)
+    ) -> object:
+        """Proxy: soft- or hard-delete an item on the paired server."""
+        return await _proxy_json(
+            "DELETE", f"/media/{item_id}", params={"permanent": permanent}
+        )
+
+    @app.post("/media/{item_id}/restore")
+    async def proxy_restore_media(item_id: str) -> object:
+        """Proxy: restore a trashed item on the paired server."""
+        return await _proxy_json("POST", f"/media/{item_id}/restore")
+
+    @app.post("/media/bulk-delete")
+    async def proxy_bulk_delete(request: Request) -> object:
+        """Proxy: soft- or hard-delete multiple items in one call."""
+        body = await request.json()
+        return await _proxy_json("POST", "/media/bulk-delete", json=body)
+
+    @app.get("/dashboard")
+    async def dashboard_page() -> Response:
+        """Serve the same dashboard UI as the server, adapted to run on-display.
+
+        Library/browse calls above are proxied to the paired server; the
+        page's slideshow controls (next/prev/pause/show/play-all) target this
+        app's own /slideshow/* routes directly, since the display can act on
+        them without a round trip.
+        """
+        return Response(
+            content=render_dashboard_html(role="display"), media_type="text/html"
+        )
 
     return app

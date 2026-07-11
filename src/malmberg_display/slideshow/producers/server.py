@@ -124,25 +124,33 @@ class ServerProducer:
     async def _stream_selected(
         self, item_ids: Sequence[str]
     ) -> AsyncGenerator[CachedItem, None]:
-        """Yield only *item_ids*, in order, resolving them from the full index."""
-        by_id: dict[str, dict] = {}
-        page = 1
-        while True:
-            data = await self._fetch_page(page)
-            if data is None:
-                break
-            for raw in data.get("items", []):
-                by_id[raw.get("id", "")] = raw
-            if not data.get("has_next", False):
-                break
-            page += 1
+        """Yield only *item_ids*, in order, resolving each directly by id.
+
+        Fetches ``/media/{id}/info`` per id instead of paging the whole
+        library index: a transient failure or a missing id only drops that
+        one item, rather than silently yielding nothing for the entire
+        selection (which previously left the display frozen on the last
+        shown photo -- async_load_infinite retries an empty cycle forever).
+        """
         for item_id in item_ids:
-            raw = by_id.get(item_id)
+            raw = await self._fetch_info(item_id)
             if raw is None:
                 continue
             item = await self._item_from_raw(raw)
             if item is not None:
                 yield item
+
+    async def _fetch_info(self, item_id: str) -> Optional[dict]:
+        """GET /media/{item_id}/info; None on request failure or 404."""
+        try:
+            resp = await self._client.get(
+                f"{self._url}/media/{item_id}/info", timeout=10.0
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            _log.warning("Server request failed (item %s): %s", item_id, exc)
+            return None
+        return resp.json()
 
     async def _fetch_page(self, page: int) -> Optional[dict]:
         """GET one /media page; None on request failure."""

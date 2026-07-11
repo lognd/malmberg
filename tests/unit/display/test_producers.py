@@ -132,3 +132,73 @@ async def test_server_producer_skips_on_http_error(tmp_path: Path) -> None:
     producer = ServerProducer("http://server:8000", tmp_path, mock_client)
     items = [item async for item in producer.items()]
     assert items == []
+
+
+# ---------------------------------------------------------------------------
+# ServerProducer -- single/playlist selection (item_ids) resolves per id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_producer_selected_ids_fetch_info_directly(
+    tmp_path: Path,
+) -> None:
+    """_stream_selected must hit /media/{id}/info per id, not page /media."""
+    (tmp_path / "abc").mkdir()
+    (tmp_path / "abc" / "photo.jpg").write_bytes(b"img")
+
+    info_resp = MagicMock()
+    info_resp.raise_for_status = MagicMock()
+    info_resp.json = MagicMock(return_value={"id": "abc", "filename": "photo.jpg"})
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=info_resp)
+
+    producer = ServerProducer(
+        "http://server:8000", tmp_path, mock_client, item_ids=["abc"]
+    )
+    items = [item async for item in producer.items()]
+
+    assert len(items) == 1
+    assert items[0].item_id == "abc"
+    called_url = mock_client.get.call_args.args[0]
+    assert called_url == "http://server:8000/media/abc/info"
+
+
+@pytest.mark.asyncio
+async def test_server_producer_selected_ids_survive_one_failure(
+    tmp_path: Path,
+) -> None:
+    """A transient failure resolving one requested id must not drop the rest.
+
+    Regression: the old paging-based _stream_selected resolved every id from
+    a single full-library scan, so ANY page fetch failure (even a transient
+    one) silently yielded nothing for the whole selection -- leaving the
+    display frozen forever on the last shown photo (async_load_infinite
+    retries an empty cycle indefinitely rather than terminating).
+    """
+    import httpx
+
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "b.jpg").write_bytes(b"img")
+
+    ok_resp = MagicMock()
+    ok_resp.raise_for_status = MagicMock()
+    ok_resp.json = MagicMock(return_value={"id": "b", "filename": "b.jpg"})
+
+    async def _get(url: str, **kwargs: object) -> MagicMock:
+        if url.endswith("/media/a/info"):
+            raise httpx.ConnectError("transient failure fetching a")
+        return ok_resp
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=_get)
+
+    producer = ServerProducer(
+        "http://server:8000", tmp_path, mock_client, item_ids=["a", "b"]
+    )
+    items = [item async for item in producer.items()]
+
+    assert [i.item_id for i in items] == ["b"], (
+        "a transient failure resolving id 'a' incorrectly dropped id 'b' too"
+    )

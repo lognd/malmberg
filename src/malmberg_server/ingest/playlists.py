@@ -43,8 +43,7 @@ class PlaylistStore:
         try:
             data = json.loads(path.read_text())
             self._playlists = {
-                str(name): [str(i) for i in items]
-                for name, items in data.items()
+                str(name): [str(i) for i in items] for name, items in data.items()
             }
             _log.info("Loaded %d playlists from %s", len(self._playlists), path)
             return Ok(len(self._playlists))

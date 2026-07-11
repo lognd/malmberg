@@ -50,6 +50,19 @@ class MediaItem(BaseModel):
     dwell_override_s: Optional[float] = None
     """Per-file dwell time override; None means use the global default."""
     tags: list[str] = Field(default_factory=list)
+    trashed_at: Optional[datetime] = None
+    """When this item was soft-deleted (moved to trash); None if not trashed.
+
+    Trashed items stay in the index (so they remain listable/restorable) but
+    are excluded from list()/stats()/producers. Defaults to None so existing
+    on-disk index lines (written before this field existed) parse unchanged.
+    """
+    trash_path: Optional[str] = None
+    """Relative path under the trash root where the file currently lives.
+
+    Set together with trashed_at when an item is soft-deleted; cleared on
+    restore. None for items that were never trashed.
+    """
 
 
 class MediaPage(BaseModel):

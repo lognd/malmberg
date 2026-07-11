@@ -174,6 +174,21 @@ even when opened from a phone.
 If `ServerConfig.display_url` is not configured, the controls render disabled
 with a short hint to set `MALMBERG_DISPLAY_URL`.
 
+**This is also the same page the Display serves at its own `GET /dashboard`**
+(see "Display-hosted dashboard" below) -- both are rendered from a single
+template, `malmberg_server.api.web.render_dashboard_html(role)`, so the two
+accessors never desync. Only a JS `MALMBERG_ROLE` constant differs between
+the two: it switches whether slideshow controls target this server's
+`/control/*` proxy or the display's own `/slideshow/*` routes directly, and
+hides server-only sections (multi-display selection, the year "play query"
+shortcut, and programmed slideshows) when hosted on a display.
+
+The page also has a **Recycle bin** panel (see `GET /media/trash` /
+`POST /media/{id}/restore` below) and, in the "Control the photo frame"
+panel, de-emphasized **Restart display** / **Restart server** buttons behind
+a confirmation dialog (see `POST /control/restart` and `POST /admin/restart`
+below).
+
 **Response:** `text/html`
 
 ---
@@ -226,26 +241,33 @@ changed.
 
 ### `DELETE /media/{id}`
 
-Apply the hide policy for a media item.
+Apply the hide policy for a media item (`?permanent=true` bypasses the hide
+policy and always hard-deletes).
 
 The action taken depends on the item's `hide_policy` field (which can be set via
 `PATCH` before calling `DELETE`):
 
 | `hide_policy` | Action |
 |---------------|--------|
-| `"delete"` (default) | File is moved to `/fs/.trash/`; item is removed from the index |
+| `"delete"` (default) | File is moved to `/fs/.trash/`; item is **marked trashed but kept in the index** (recoverable -- see `GET /media/trash` / `POST /media/{id}/restore`) |
 | `"keep"` | Item is tagged `do_not_display=true`; file stays in `/fs/media/` |
+
+Passing `?permanent=true` always hard-deletes: the file is unlinked (from
+`/fs/media/` or `/fs/.trash/`, whichever it currently lives under) and the
+index entry is dropped. This is never recoverable.
 
 **Response:**
 
 ```json
 { "status": "trashed", "id": "..." }
 ```
-
 or
-
 ```json
 { "status": "hidden", "id": "..." }
+```
+or (when `permanent=true`)
+```json
+{ "status": "deleted", "id": "..." }
 ```
 
 **Errors:**
@@ -253,13 +275,60 @@ or
 
 ---
 
-### `POST /control/next`, `POST /control/prev`, `POST /control/pause`, `GET /control/status`
+### `GET /media/trash`
+
+List trashed (soft-deleted) items for the recycle bin view -- the same
+`MediaPage` shape as `GET /media`, newest-trashed first. Registered ahead of
+`GET /media/{id}` in the route table so the literal `trash` path segment is
+never swallowed as an item id.
+
+**Query parameters:** `page` (default 1), `page_size` (default 50, max 500).
+
+**Response: `MediaPage`** (see model below), containing only items with
+`trashed_at` set.
+
+---
+
+### `POST /media/{id}/restore`
+
+Restore a trashed item: moves its file back from `/fs/.trash/` to
+`/fs/media/` and clears `trashed_at` / `trash_path`. The item then
+reappears in `GET /media` and disappears from `GET /media/trash`.
+
+**Response:** the restored `MediaItem`.
+
+**Errors:**
+- `404` -- item not found
+- `500` -- item is known but not currently trashed, or its file is missing
+  from both `/fs/.trash/` and `/fs/media/`
+
+---
+
+### `POST /admin/restart`
+
+Acknowledges with `{"status": "restarting"}`, then re-execs this server
+process (`os.execv(sys.executable, [sys.executable, "-m", "malmberg_server"]`)
+a fraction of a second later so the response has time to flush to the
+client. Re-exec (rather than `os.kill`/`sys.exit`) is used deliberately so
+this works whether or not a supervisor like systemd is watching the
+process. Use when the server needs a remote nudge (e.g. a wedged state) and
+nobody is physically at the machine.
+
+**Response:**
+```json
+{ "status": "restarting" }
+```
+
+---
+
+### `POST /control/next`, `POST /control/prev`, `POST /control/pause`, `GET /control/status`, `POST /control/play-all`, `POST /control/show/{id}`, `POST /control/restart`
 
 Proxy endpoints that forward to the paired display's control API
 (`{display_url}/slideshow/next`, `/slideshow/prev`, `/slideshow/pause`,
-`/status` respectively). These exist so that browser clients (e.g. the
-dashboard page) can control the display same-origin through the server,
-avoiding CORS and keeping the display's control API off the open network.
+`/status`, `/slideshow/all`, `/slideshow/show/{id}`, `/admin/restart`
+respectively). These exist so that browser clients (e.g. the dashboard
+page) can control the display same-origin through the server, avoiding
+CORS and keeping the display's control API off the open network.
 
 `display_url` is configured via `ServerConfig.display_url` (env
 `MALMBERG_DISPLAY_URL`, toml key `display_url`), e.g.
@@ -292,6 +361,8 @@ passed through unchanged.
 | `hide_policy` | `"delete"` \| `"keep"` | `"delete"` | Behaviour applied by `DELETE /media/{id}` |
 | `dwell_override_s` | float \| null | `null` | Per-item display duration; null means use the display's global `dwell_s` |
 | `tags` | list[str] | `[]` | Arbitrary user-defined tags |
+| `trashed_at` | datetime \| null | `null` | Set by `DELETE /media/{id}` (soft-delete path) when the item is moved to `/fs/.trash/`; cleared by `POST /media/{id}/restore`. Trashed items stay in the index (recoverable, listed by `GET /media/trash`) but are excluded from `GET /media`, `GET /stats`, and every display producer. |
+| `trash_path` | str \| null | `null` | Relative path under `/fs/.trash/` where a trashed item's file currently lives; `null` when not trashed. New fields default to `null` so index lines written before this field existed still parse unchanged. |
 
 ### `MediaMetadata`
 
@@ -418,3 +489,55 @@ Return the recent display history, newest first.
 
 The history buffer holds the last `history_len` items (default 32, configurable in
 `display.toml`).
+
+---
+
+### `POST /admin/restart`
+
+Acknowledges with `{"status": "restarting"}`, then re-execs this display
+process (`os.execv(sys.executable, [sys.executable, "-m", "malmberg_display"]`)
+a fraction of a second later, mirroring the server's `POST /admin/restart`
+(see above). The server's `POST /control/restart` proxies here.
+
+**Response:**
+```json
+{ "status": "restarting" }
+```
+
+---
+
+### Display-hosted dashboard: `GET /dashboard` + library proxy
+
+The Display hosts a second accessor to the same photo library, so a user in
+front of the frame (or on the same LAN) does not need to know the server's
+address. `GET /dashboard` serves the identical dashboard page the server
+serves (see `GET /dashboard` under Server API above) rendered with
+`role="display"`: browse/details/delete/recycle-bin calls are proxied to
+the paired server, but slideshow controls (Previous/Next/Pause, "Display it
+now", "Play whole library", "Restart display") hit this display's own
+routes directly -- no server round trip needed for those.
+
+Only wired up when the display was built with both `server_url` and
+`http_client` (i.e. it is paired with a server -- see
+`malmberg_display.app.app.DisplayApp._run`); otherwise every proxy route
+below responds `503`.
+
+| Route | Forwards to (on the paired server) |
+|-------|-------------------------------------|
+| `GET /media` | `GET /media` (query params passed through) |
+| `GET /media/trash` | `GET /media/trash` |
+| `GET /media/{id}/thumb` | `GET /media/{id}/thumb` (streamed, not buffered) |
+| `GET /media/{id}` | `GET /media/{id}` (streamed -- used for the in-dashboard `<video>` player too) |
+| `GET /media/{id}/info` | `GET /media/{id}/info` |
+| `GET /stats` | `GET /stats` |
+| `DELETE /media/{id}` | `DELETE /media/{id}` (`?permanent=` passed through) |
+| `POST /media/{id}/restore` | `POST /media/{id}/restore` |
+| `POST /media/bulk-delete` | `POST /media/bulk-delete` |
+| `POST /control/restart-server` | `POST /admin/restart` (restarts the paired server itself) |
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `503` | Display is not paired with a server (`server_url`/`http_client` not configured) |
+| `502` | The paired server could not be reached, or returned an error |

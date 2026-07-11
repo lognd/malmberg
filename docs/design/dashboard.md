@@ -1,5 +1,22 @@
 # Web Dashboard
 
+> **Implementation note:** the page table below describes an earlier
+> HTMX/Jinja2 design. What actually shipped is a single self-contained page
+> (`GET /dashboard`, `malmberg_server.api.web.render_dashboard_html`) with
+> inline CSS/JS and no build step or external CDNs -- see
+> `docs/software/api-reference.md` for the current, accurate endpoint list.
+> It folds browse/upload/stats/recycle-bin/controls/programmed-slideshows
+> into one page rather than the separate `/ui/*` routes below.
+>
+> **Second accessor:** the same page is also served by the Display itself at
+> its own `GET /dashboard`, so a user in front of the frame does not need to
+> know the server's address. The Display proxies library calls (`/media*`,
+> `/stats`) to its paired server and answers slideshow controls
+> (Previous/Next/Pause/Show/Restart) directly, so browsing, showing a photo,
+> viewing details, deleting, and restoring from the recycle bin all work
+> identically from either accessor. See "Display-hosted dashboard" in
+> `docs/software/api-reference.md`.
+
 A small HTMX frontend served by the Server at `/ui`. No separate build step;
 templates are Jinja2, served by FastAPI's `TemplateResponse`. Designed to be
 usable from a phone browser on the same LAN.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -97,7 +98,7 @@ class MediaStore:
         trash_root: Path,
         media_root: Path,
     ) -> Result[dict[str, str], IngestError]:
-        """Apply hide_policy for *item_id*: trash or tag do_not_display."""
+        """Apply hide_policy for *item_id*: recoverable trash, or tag do_not_display."""
         item = self._items.get(item_id)
         if item is None:
             return Err(IngestError.NotFound)
@@ -108,7 +109,15 @@ class MediaStore:
                 dst = trash_root / item.server_path
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
-            del self._items[item_id]
+            # Keep the index entry (marked trashed) so the item remains
+            # listable in the recycle bin and restorable; only the normal
+            # list()/stats() views and producers exclude it.
+            self._items[item_id] = item.model_copy(
+                update={
+                    "trashed_at": datetime.now(timezone.utc),
+                    "trash_path": item.server_path,
+                }
+            )
             _log.info("Trashed %s (%s)", item_id, item.filename)
             return Ok({"status": "trashed", "id": item_id})
         else:
@@ -120,21 +129,57 @@ class MediaStore:
         self,
         item_id: str,
         media_root: Path,
+        trash_root: Optional[Path] = None,
     ) -> Result[dict[str, str], IngestError]:
         """Permanently remove *item_id*: drop the index entry and unlink the file.
 
-        Unlike ``delete``, this never moves the file to trash and is not
+        Looks for the file under *trash_root* when the item is currently
+        trashed (its ``trash_path`` is set) and *trash_root* is given,
+        otherwise under *media_root*. Unlike ``delete``, this is never
         recoverable. Missing files on disk are ignored (index entry is still
         removed).
         """
         item = self._items.get(item_id)
         if item is None:
             return Err(IngestError.NotFound)
-        src = media_root / item.server_path
+        if item.trashed_at is not None and trash_root is not None:
+            src = trash_root / (item.trash_path or item.server_path)
+        else:
+            src = media_root / item.server_path
         src.unlink(missing_ok=True)
         del self._items[item_id]
         _log.info("Permanently deleted %s (%s)", item_id, item.filename)
         return Ok({"status": "deleted", "id": item_id})
+
+    def restore(
+        self,
+        item_id: str,
+        trash_root: Path,
+        media_root: Path,
+    ) -> Result[MediaItem, IngestError]:
+        """Un-trash *item_id*: move its file back from *trash_root* and clear the flag.
+
+        Returns NotFound if the item is unknown, and StorageError if it is
+        known but not currently trashed, or if the file is missing from
+        trash.
+        """
+        item = self._items.get(item_id)
+        if item is None:
+            return Err(IngestError.NotFound)
+        if item.trashed_at is None:
+            return Err(IngestError.StorageError)
+        src = trash_root / (item.trash_path or item.server_path)
+        dst = media_root / item.server_path
+        if src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+        elif not dst.is_file():
+            _log.error("Cannot restore %s: file missing from trash and media", item_id)
+            return Err(IngestError.StorageError)
+        restored = item.model_copy(update={"trashed_at": None, "trash_path": None})
+        self._items[item_id] = restored
+        _log.info("Restored %s (%s) from trash", item_id, item.filename)
+        return Ok(restored)
 
     # ------------------------------------------------------------------
     # Queries
@@ -177,7 +222,9 @@ class MediaStore:
         *q* is a 4-digit year.
         """
         all_items = [
-            it for it in self._items.values() if not (skip_hidden and it.do_not_display)
+            it
+            for it in self._items.values()
+            if it.trashed_at is None and not (skip_hidden and it.do_not_display)
         ]
         if q:
             all_items = [it for it in all_items if self._matches_query(it, q)]
@@ -190,6 +237,26 @@ class MediaStore:
         chunk = all_items[start : start + page_size]
         if media_root is not None:
             chunk = [self._refresh_if_stale(it, media_root) for it in chunk]
+        return MediaPage(
+            items=chunk,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_next=(start + page_size) < total,
+        )
+
+    def list_trash(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> MediaPage:
+        """Return a paginated slice of trashed items only (the recycle bin)."""
+        all_items = [it for it in self._items.values() if it.trashed_at is not None]
+        all_items.sort(key=lambda it: it.trashed_at, reverse=True)
+        total = len(all_items)
+        start = (page - 1) * page_size
+        chunk = all_items[start : start + page_size]
         return MediaPage(
             items=chunk,
             total=total,
@@ -255,7 +322,9 @@ class MediaStore:
         4-digit year string -> count, for dated items only).
         """
         items = [
-            it for it in self._items.values() if not (skip_hidden and it.do_not_display)
+            it
+            for it in self._items.values()
+            if it.trashed_at is None and not (skip_hidden and it.do_not_display)
         ]
         images = sum(1 for it in items if it.kind == "image")
         videos = sum(1 for it in items if it.kind == "video")
