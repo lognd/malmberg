@@ -141,7 +141,7 @@ class OverlayConfig:
         font_size_primary: int = 36,
         font_size_secondary: int = 24,
         font_size_clock: int = 48,
-        scrim_alpha: int = 140,
+        scrim_alpha: int = 205,
         margin: int = 28,
         line_spacing: int = 8,
     ) -> None:

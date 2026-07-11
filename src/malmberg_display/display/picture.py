@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pygame  # type: ignore[import-not-found]
-from PIL import Image, ImageOps  # type: ignore[import-not-found]
+from PIL import Image, ImageFilter, ImageOps  # type: ignore[import-not-found]
 
 from malmberg_display.display.overlay import ImageCaption
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
 
-# Downscale fraction for the cheap two-pass blur of the background fill.
-_BLUR_DOWNSCALE = 0.06
+# Gaussian blur radius for the backdrop, as a fraction of the image's long edge.
+_BG_BLUR_FRACTION = 0.02
 # Alpha of the black wash over the blurred background so the photo stands out.
 _BG_DARKEN_ALPHA = 150
 
@@ -31,23 +31,20 @@ def _scaled_size(
     return max(1, round(iw * scale)), max(1, round(ih * scale))
 
 
-def _compose_frame(src: Any, tw: int, th: int) -> Any:
-    """Compose a full-screen frame: blurred cover fill behind the fitted photo.
+def _compose_frame(fg_src: Any, bg_src: Any, tw: int, th: int) -> Any:
+    """Compose a full-screen frame: Gaussian-blurred cover fill behind the fitted photo.
 
     This is the "professional photo-frame" look -- the image is never stretched;
     portrait/odd-ratio photos get a soft blurred version of themselves as the
-    backdrop instead of hard black bars.
+    backdrop instead of hard black bars.  *bg_src* is a pre-blurred copy so
+    scaling it stays smooth (no blocky pixelation at the edges).
     """
-    iw, ih = src.get_size()
+    iw, ih = fg_src.get_size()
     frame = pygame.Surface((tw, th)).convert()
 
-    # Background: cover-scale, cheap blur (downscale then upscale), then darken.
+    # Background: cover-scale the already-blurred image, then darken.
     cw, ch = _scaled_size(iw, ih, tw, th, cover=True)
-    bg = pygame.transform.smoothscale(src, (cw, ch))
-    small = pygame.transform.smoothscale(
-        bg, (max(1, int(cw * _BLUR_DOWNSCALE)), max(1, int(ch * _BLUR_DOWNSCALE)))
-    )
-    bg = pygame.transform.smoothscale(small, (cw, ch))
+    bg = pygame.transform.smoothscale(bg_src, (cw, ch))
     frame.blit(bg, ((tw - cw) // 2, (th - ch) // 2))
     dark = pygame.Surface((tw, th), pygame.SRCALPHA)
     dark.fill((0, 0, 0, _BG_DARKEN_ALPHA))
@@ -55,7 +52,7 @@ def _compose_frame(src: Any, tw: int, th: int) -> Any:
 
     # Foreground: contain-scale, centered, unstretched.
     fw, fh = _scaled_size(iw, ih, tw, th, cover=False)
-    fg = pygame.transform.smoothscale(src, (fw, fh))
+    fg = pygame.transform.smoothscale(fg_src, (fw, fh))
     frame.blit(fg, ((tw - fw) // 2, (th - fh) // 2))
     return frame
 
@@ -93,6 +90,7 @@ class PictureDisplay(Displayable):
     ) -> None:
         self._path = path
         self._surface: Optional[Any] = None
+        self._bg: Optional[Any] = None
         self._taken_at = taken_at
         self._lat = lat
         self._lon = lon
@@ -103,7 +101,7 @@ class PictureDisplay(Displayable):
     async def load(self, ctx: LoadContext) -> None:
         """Decode the image and build the caption off the event loop."""
         loop = asyncio.get_running_loop()
-        self._surface = await loop.run_in_executor(None, self._decode)
+        self._surface, self._bg = await loop.run_in_executor(None, self._decode)
         # Caption building may call a (possibly network-bound) geocoder.
         self._caption = await loop.run_in_executor(
             None,
@@ -116,10 +114,14 @@ class PictureDisplay(Displayable):
             ),
         )
 
-    def _decode(self) -> Any:
-        """Decode with Pillow, applying EXIF orientation so photos aren't rotated."""
+    def _decode(self) -> tuple[Any, Any]:
+        """Decode with Pillow (EXIF-oriented); return (photo, pre-blurred backdrop)."""
         img = ImageOps.exif_transpose(Image.open(self._path)).convert("RGB")
-        return pygame.image.fromstring(img.tobytes(), img.size, img.mode)
+        fg = pygame.image.fromstring(img.tobytes(), img.size, img.mode)
+        radius = max(2, round(max(img.size) * _BG_BLUR_FRACTION))
+        blurred = img.filter(ImageFilter.GaussianBlur(radius))
+        bg = pygame.image.fromstring(blurred.tobytes(), blurred.size, blurred.mode)
+        return fg, bg
 
     async def display(self, ctx: DisplayContext) -> None:
         """Compose an aspect-correct frame, cross-fade in, draw overlay, then dwell."""
@@ -130,7 +132,7 @@ class PictureDisplay(Displayable):
             return
 
         w, h = ctx.width, ctx.height
-        frame = _compose_frame(self._surface, w, h)
+        frame = _compose_frame(self._surface, self._bg, w, h)
 
         if ctx.fade_duration_s > 0:
             await self._crossfade(ctx, frame)

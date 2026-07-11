@@ -52,8 +52,8 @@ class DisplayConfig(BaseModel):
     """Where to render the clock: top-right, top-left, bottom-right, bottom-left."""
     overlay_font_size: int = 36
     """Primary font size (px) for caption date and clock text."""
-    overlay_scrim_alpha: int = 140
-    """Opacity of the dark scrim behind overlay text (0=transparent, 255=opaque)."""
+    overlay_scrim_alpha: int = 205
+    """Opacity of the dark-glass overlay panels (0=transparent, 255=opaque)."""
 
     @field_validator("dwell_s")
     @classmethod
