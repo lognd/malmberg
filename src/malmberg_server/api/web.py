@@ -860,42 +860,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--muted);
     display: none;
   }
-  #month-filter-toggle { margin-top: 0.6rem; min-height: 44px; padding: 0.3rem 0.9rem; }
-  #month-filter-buttons {
-    margin-top: 0.6rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  #month-filter-buttons.collapsed { display: none; }
-  #month-filter-buttons .mfb-year {
-    font-weight: 700;
-    color: var(--accent);
-    font-size: 0.85rem;
-  }
-  #month-filter-buttons .mfb-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-top: 0.25rem;
-  }
-  #month-filter-buttons button {
-    min-height: 44px;
-    min-width: 44px;
-    padding: 0 0.7rem;
-    font-size: 0.85rem;
-    font-weight: 700;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--bg-alt);
-    color: var(--text);
-    cursor: pointer;
-  }
-  #month-filter-buttons button.yf-active {
-    background: var(--accent);
-    color: #282828;
-    border-color: var(--accent);
-  }
   #frame-play-row { margin-top: 0.6rem; }
   #frame-search-play-btn {
     min-height: 44px;
@@ -1569,12 +1533,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         </div>
         <div id="frame-quick-row">
           <div id="year-filter-buttons"></div>
-          <button id="month-filter-toggle" type="button" class="collapse-btn"
-                  aria-label="Show or hide months">
-            Show months
-          </button>
         </div>
-        <div id="month-filter-buttons" class="collapsed"></div>
         <div class="filter-box-row">
           <label for="frame-time-input">Time</label>
           <input id="frame-time-input" type="text" autocomplete="off"
@@ -2192,12 +2151,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var btnPlayAll = document.getElementById("btn-play-all");
   var displaySelect = document.getElementById("display-select");
   var yearFilterButtons = document.getElementById("year-filter-buttons");
-  var monthFilterButtons = document.getElementById("month-filter-buttons");
-  var monthFilterToggle = document.getElementById("month-filter-toggle");
-  monthFilterToggle.addEventListener("click", function () {
-    var collapsed = monthFilterButtons.classList.toggle("collapsed");
-    monthFilterToggle.textContent = collapsed ? "Show months" : "Hide months";
-  });
 
   var lastCurrentItemId = null;
   var lastDisplaysKey = null;
@@ -2423,12 +2376,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (btn) btn.classList.add("yf-active");
   }
 
-  function setActiveMonth(btn) {
-    var all = monthFilterButtons.querySelectorAll("button");
-    for (var i = 0; i < all.length; i++) all[i].classList.remove("yf-active");
-    if (btn) btn.classList.add("yf-active");
-  }
-
   function loadYearFilter() {
     fetch("/stats")
       .then(function (r) { return r.json(); })
@@ -2450,7 +2397,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           btn.textContent = year;
           btn.addEventListener("click", function () {
             setActiveYear(btn);
-            setActiveMonth(null);
             frameTimeInput.value = year;
             framePlaceInput.value = "";
             framePersonInput.value = "";
@@ -2466,61 +2412,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             );
           });
           yearFilterButtons.appendChild(btn);
-        });
-      })
-      .catch(function () {});
-  }
-
-  /* Month quick-pick buttons, grouped by year, revealed by "Show months"
-     (kept collapsed by default since a full month grid is a lot of
-     buttons for a first-time visitor). */
-  function loadMonthFilter() {
-    fetch("/stats")
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        monthFilterButtons.innerHTML = "";
-        var byMonthData = data.by_month || {};
-        var monthsByYear = {};
-        Object.keys(byMonthData).forEach(function (ym) {
-          var y = ym.slice(0, 4);
-          (monthsByYear[y] = monthsByYear[y] || []).push(ym);
-        });
-        Object.keys(monthsByYear).sort().reverse().forEach(function (year) {
-          var yearEl = document.createElement("div");
-          yearEl.className = "mfb-year";
-          yearEl.textContent = year;
-          var row = document.createElement("div");
-          row.className = "mfb-row";
-          monthsByYear[year].sort().forEach(function (ym) {
-            var mi = parseInt(ym.slice(5, 7), 10) - 1;
-            var monthName = MONTH_NAMES[mi] || ym.slice(5, 7);
-            var btn = document.createElement("button");
-            btn.type = "button";
-            btn.textContent = monthName;
-            btn.setAttribute(
-              "aria-label", "Show " + monthName + " " + year + " on the frame"
-            );
-            btn.addEventListener("click", function () {
-              setActiveYear(null);
-              setActiveMonth(btn);
-              frameTimeInput.value = ym;
-              framePlaceInput.value = "";
-              framePersonInput.value = "";
-              loadFramePreview(1);
-              runControl(
-                btn,
-                "/control/play-query?q_time=" + encodeURIComponent(ym) +
-                  "&loop=" + isLoop(),
-                "POST",
-                undefined,
-                "...",
-                loopNote("Now showing " + monthName + " " + year + ".")
-              );
-            });
-            row.appendChild(btn);
-          });
-          monthFilterButtons.appendChild(yearEl);
-          monthFilterButtons.appendChild(row);
         });
       })
       .catch(function () {});
@@ -2866,7 +2757,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (frameTimeDebounce) window.clearTimeout(frameTimeDebounce);
     frameTimeDebounce = window.setTimeout(function () {
       setActiveYear(null);
-      setActiveMonth(null);
       loadFramePreview(1);
     }, 350);
   });
@@ -3334,7 +3224,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   bulkAddPlaylist.addEventListener("click", function () {
     var ids = selectedIds();
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+      showToast("Select one or more photos first.", "err");
+      return;
+    }
     renderPlaylistPicker(bulkPlaylistPicker, function (name) {
       fetch("/playlists/" + encodeURIComponent(name) + "/items/bulk", {
         method: "POST",
@@ -3356,8 +3249,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   /* ---- Reusable playlist picker (existing list + create-new) ---- */
   function renderPlaylistPicker(container, onPick) {
     container.innerHTML = "";
+    // The container itself is hidden until it holds a picker; reveal it.
+    container.classList.add("show");
     var wrap = document.createElement("div");
-    wrap.id = "playlist-picker show";
     wrap.className = "show";
     wrap.style.marginTop = "0.5rem";
     wrap.style.background = "var(--bg-alt)";
@@ -3865,7 +3759,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   if (MALMBERG_ROLE !== "display") {
     loadPlaylists();
     loadYearFilter();
-    loadMonthFilter();
   }
   setInterval(refreshStatus, 5000);
 })();
