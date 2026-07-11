@@ -67,30 +67,27 @@ def _get_font(size: int, bold: bool = False) -> Any:
 # ---------------------------------------------------------------------------
 
 
-_GRADIENT_CACHE: dict[tuple[int, int, int], Any] = {}
-
-
-def _bottom_gradient(width: int, height: int, max_alpha: int) -> Any:
-    """Return a cached full-width surface that fades transparent->dark downward.
-
-    Used as a soft scrim behind bottom captions so text stays legible over any
-    photo without a hard-edged box.
-    """
+def _glass_panel(
+    surface: Any,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    *,
+    alpha: int = 130,
+    radius: int = 20,
+) -> None:
+    """Draw a rounded 'dark glass' panel: translucent fill + soft edge highlight."""
     import pygame  # type: ignore[import-not-found]
 
-    key = (width, height, max_alpha)
-    cached = _GRADIENT_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    grad = pygame.Surface((width, height), pygame.SRCALPHA)
-    for row in range(height):
-        # Ease-in so the darkening is gentle at the top, stronger at the bottom.
-        frac = (row / max(1, height - 1)) ** 1.6
-        alpha = int(max_alpha * frac)
-        pygame.draw.line(grad, (0, 0, 0, alpha), (0, row), (width, row))
-    _GRADIENT_CACHE[key] = grad
-    return grad
+    panel = pygame.Surface((w, h), pygame.SRCALPHA)
+    # Cool near-black fill for the glass body.
+    pygame.draw.rect(panel, (16, 18, 24, alpha), (0, 0, w, h), border_radius=radius)
+    # 1px light border gives the pane a subtle glassy edge.
+    pygame.draw.rect(
+        panel, (255, 255, 255, 28), (0, 0, w, h), width=1, border_radius=radius
+    )
+    surface.blit(panel, (x, y))
 
 
 def _blit_text_shadow(
@@ -250,7 +247,7 @@ class OverlayRenderer:
     # ------------------------------------------------------------------
 
     def render_clock(self, surface: Any, width: int, height: int) -> None:
-        """Draw the current time (large) and date (below) in the top-right."""
+        """Draw the current time (large) and date (below) on a top-right glass panel."""
         cfg = self._cfg
         now = datetime.now()
         time_label = now.strftime("%-I:%M %p")
@@ -258,15 +255,31 @@ class OverlayRenderer:
 
         time_font = _get_font(cfg.font_size_clock, bold=False)
         date_font = _get_font(cfg.font_size_secondary, bold=False)
-        m = cfg.margin
-        right = width - m
 
-        tw, th = _blit_text_shadow(
-            surface, time_font, time_label, (right, m), self._COLOR_CLOCK,
-            right_align=True,
+        tw, th = time_font.size(time_label)
+        dw, dh = date_font.size(date_label)
+        inner_w = max(tw, dw)
+        gap = 2
+        inner_h = th + gap + dh
+
+        pad_x, pad_y = 22, 16
+        panel_w = inner_w + pad_x * 2
+        panel_h = inner_h + pad_y * 2
+        m = cfg.margin
+        panel_x = width - m - panel_w
+        panel_y = m
+
+        _glass_panel(
+            surface, panel_x, panel_y, panel_w, panel_h,
+            alpha=cfg.scrim_alpha, radius=18,
+        )
+        right = panel_x + pad_x + inner_w
+        _blit_text_shadow(
+            surface, time_font, time_label, (right, panel_y + pad_y),
+            self._COLOR_CLOCK, right_align=True,
         )
         _blit_text_shadow(
-            surface, date_font, date_label, (right, m + th + 2),
+            surface, date_font, date_label, (right, panel_y + pad_y + th + gap),
             self._COLOR_SECONDARY, right_align=True,
         )
 
@@ -302,20 +315,29 @@ class OverlayRenderer:
         if not rows:
             return
 
-        # Column: align all values past the widest label.
-        col_x = m + max(label_font.size(lbl)[0] for lbl, _ in rows) + 24
+        # Column widths: align all values past the widest label.
+        label_w = max(label_font.size(lbl)[0] for lbl, _ in rows)
+        value_w = max(value_font.size(val)[0] for _, val in rows)
+        col_gap = 24
         line_h = value_font.get_height()
         total_h = line_h * len(rows) + ls * (len(rows) - 1)
 
-        grad_h = min(height, total_h + m * 2 + int(height * 0.10))
-        surface.blit(
-            _bottom_gradient(width, grad_h, min(220, cfg.scrim_alpha + 60)),
-            (0, height - grad_h),
+        pad_x, pad_y = 24, 18
+        panel_w = label_w + col_gap + value_w + pad_x * 2
+        panel_h = total_h + pad_y * 2
+        panel_x = m
+        panel_y = height - m - panel_h
+
+        _glass_panel(
+            surface, panel_x, panel_y, panel_w, panel_h,
+            alpha=cfg.scrim_alpha, radius=20,
         )
 
-        y = height - m - total_h
+        x0 = panel_x + pad_x
+        col_x = x0 + label_w + col_gap
+        y = panel_y + pad_y
         for lbl, val in rows:
-            _blit_text_shadow(surface, label_font, lbl, (m, y), self._COLOR_SECONDARY)
+            _blit_text_shadow(surface, label_font, lbl, (x0, y), self._COLOR_SECONDARY)
             _blit_text_shadow(surface, value_font, val, (col_x, y), self._COLOR_PRIMARY)
             y += line_h + ls
 
