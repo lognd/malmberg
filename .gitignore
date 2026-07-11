@@ -12,7 +12,9 @@ build/
 
 # uv
 .venv/
-uv.lock
+# uv.lock IS tracked: the deploy runs `uv sync --frozen`, which needs the
+# lockfile in the repo to install the pinned dependency set reproducibly on
+# the server and display machines.
 
 # Testing
 .pytest_cache/
