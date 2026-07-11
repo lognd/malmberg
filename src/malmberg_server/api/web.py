@@ -200,6 +200,40 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   }
   .place-chip b { color: var(--aqua); font-weight: 700; }
   #place-search-row #place-input { flex: 1 1 auto; }
+  /* People cards */
+  .people-grid {
+    margin-top: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .person-card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem;
+    width: 108px;
+    text-align: center;
+  }
+  .person-card img {
+    width: 88px;
+    height: 88px;
+    object-fit: cover;
+    border-radius: 6px;
+    background: var(--bg);
+  }
+  .person-card .person-count {
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin: 0.3rem 0;
+  }
+  .person-card input {
+    width: 100%;
+    font-size: 0.72rem;
+    padding: 0.2rem;
+    box-sizing: border-box;
+  }
+  #person-search-row #person-input { flex: 1 1 auto; }
   /* Upload section */
   #dropzone {
     border: 2px dashed var(--border);
@@ -1094,6 +1128,27 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     </section>
 
     <section>
+      <h2>People</h2>
+      <div class="domain-sub">
+        Faces detected in your photos are grouped automatically; give a
+        person a name below to search and play just their photos. New
+        photos are scanned in the background after upload, so it can take
+        a little while for a new face to show up here.
+      </div>
+      <div id="people-grid" class="people-grid"></div>
+      <div id="people-empty" class="domain-sub">
+        No faces detected yet.
+      </div>
+      <div class="search-row" id="person-search-row">
+        <input id="person-input" type="text" autocomplete="off"
+          list="person-suggestions"
+          placeholder="Type a person's name">
+        <datalist id="person-suggestions"></datalist>
+        <button id="person-play-btn" type="button">Play this person</button>
+      </div>
+    </section>
+
+    <section>
       <h2>Upload</h2>
       <div id="dropzone">
         <div>Drag and drop photos or videos here</div>
@@ -1920,6 +1975,108 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   // Populate suggestions once on load so the datalist isn't empty on first focus.
   loadPlaceSuggestions("");
 
+  /* ---- People: cards + naming + autocomplete + "play this person" ---- */
+  var peopleGrid = document.getElementById("people-grid");
+  var peopleEmpty = document.getElementById("people-empty");
+  var personInput = document.getElementById("person-input");
+  var personSuggestions = document.getElementById("person-suggestions");
+  var personPlayBtn = document.getElementById("person-play-btn");
+  var personDebounce = null;
+
+  function loadPeople() {
+    fetch("/people")
+      .then(function (r) { return r.json(); })
+      .then(function (people) {
+        peopleGrid.innerHTML = "";
+        peopleEmpty.style.display = (people && people.length) ? "none" : "block";
+        (people || []).forEach(function (person) {
+          var card = document.createElement("div");
+          card.className = "person-card";
+          var img = document.createElement("img");
+          img.src = person.sample_item_id
+            ? "/media/" + person.sample_item_id + "/thumb?size=200"
+            : "";
+          img.alt = person.name || "Unnamed person";
+          card.appendChild(img);
+          var count = document.createElement("div");
+          count.className = "person-count";
+          count.textContent = person.count + " photo" + (person.count === 1 ? "" : "s");
+          card.appendChild(count);
+          var nameInput = document.createElement("input");
+          nameInput.type = "text";
+          nameInput.placeholder = "Name this person";
+          nameInput.value = person.name || "";
+          nameInput.addEventListener("keydown", function (ev) {
+            if (ev.key !== "Enter") return;
+            var newName = nameInput.value.trim();
+            if (!newName) return;
+            fetch("/people/" + person.id + "/name", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: newName }),
+            })
+              .then(function (r) {
+                if (!r.ok) throw new Error("failed");
+                showToast('Named "' + newName + '".', "ok");
+                loadPeople();
+                loadPersonSuggestions("");
+                loadStats();
+              })
+              .catch(function () { showToast("Could not save name.", "err"); });
+          });
+          card.appendChild(nameInput);
+          peopleGrid.appendChild(card);
+        });
+      })
+      .catch(function () {});
+  }
+
+  function loadPersonSuggestions(prefix) {
+    fetch("/people/suggest?q=" + encodeURIComponent(prefix) + "&limit=10")
+      .then(function (r) { return r.json(); })
+      .then(function (names) {
+        personSuggestions.innerHTML = "";
+        (names || []).forEach(function (name) {
+          var opt = document.createElement("option");
+          opt.value = name;
+          personSuggestions.appendChild(opt);
+        });
+      })
+      .catch(function () {});
+  }
+
+  personInput.addEventListener("input", function () {
+    var value = personInput.value;
+    if (personDebounce) window.clearTimeout(personDebounce);
+    personDebounce = window.setTimeout(function () {
+      loadPersonSuggestions(value.trim());
+      // Also drive the main browse grid, same as the place search box.
+      searchInput.value = value;
+      state.q = value.trim();
+      state.page = 1;
+      loadGrid();
+    }, 350);
+  });
+
+  personPlayBtn.addEventListener("click", function () {
+    var name = personInput.value.trim();
+    if (!name) {
+      showToast("Type a person's name first.", "err");
+      return;
+    }
+    runControl(
+      personPlayBtn,
+      "/control/play-query?q=" + encodeURIComponent(name) + "&loop=" + isLoop(),
+      "POST",
+      undefined,
+      "...",
+      loopNote('Now showing photos of "' + name + '".')
+    );
+  });
+
+  loadPeople();
+  loadPersonSuggestions("");
+
   pagePrev.addEventListener("click", function () {
     if (state.page > 1) {
       state.page -= 1;
@@ -2494,6 +2651,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     // (like the year-filter shortcuts); hide it on the display's own page.
     var placePlayBtnEl = document.getElementById("place-play-btn");
     if (placePlayBtnEl) placePlayBtnEl.style.display = "none";
+    // Same story for "Play this person".
+    var personPlayBtnEl = document.getElementById("person-play-btn");
+    if (personPlayBtnEl) personPlayBtnEl.style.display = "none";
   }
 
   loadStats();

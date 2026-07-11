@@ -117,6 +117,52 @@ def test_proxy_places_503_when_unpaired() -> None:
     assert _client().get("/places").status_code == 503
 
 
+def test_proxy_people_forwards_to_server() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/people"
+        return httpx.Response(200, json=[{"id": "p1", "name": "Grandma", "count": 3}])
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.get("/people")
+    assert r.status_code == 200
+    assert r.json() == [{"id": "p1", "name": "Grandma", "count": 3}]
+
+
+def test_proxy_name_person_forwards_to_server() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.content
+        return httpx.Response(200, json={"id": "p1", "name": "Grandma"})
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.post("/people/p1/name", json={"name": "Grandma"})
+    assert r.status_code == 200
+    assert r.json() == {"id": "p1", "name": "Grandma"}
+    assert seen["url"] == "http://server.local:8444/people/p1/name"
+
+
+def test_proxy_suggest_people_forwards_to_server() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/people/suggest"
+        return httpx.Response(200, json=["Grandma"])
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.get("/people/suggest", params={"q": "gra"})
+    assert r.status_code == 200
+    assert r.json() == ["Grandma"]
+
+
+def test_proxy_people_503_when_unpaired() -> None:
+    assert _client().get("/people").status_code == 503
+    assert _client().post("/people/p1/name", json={"name": "x"}).status_code == 503
+    assert _client().get("/people/suggest").status_code == 503
+
+
 def test_proxy_media_thumb_streams_bytes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/media/xyz/thumb"

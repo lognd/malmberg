@@ -166,6 +166,54 @@ suggestions.
 
 ---
 
+### `GET /people`
+
+List detected people (see "Face detection and search by person" below).
+Backs the dashboard's "People" section.
+
+**Response:** `list[dict]`, each with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | str | Person id |
+| `name` | str \| null | User-assigned display name; null until named |
+| `count` | int | Distinct photos this person appears in |
+| `sample_item_id` | str \| null | A media item id to use as a thumbnail |
+
+---
+
+### `POST /people/{id}/name`
+
+Assign or change a detected person's display name.
+
+**Path parameters:** `id` -- the person id (from `GET /people`).
+
+**Request body:** `{"name": str}`
+
+**Response:** the updated Person record.
+
+**Errors:**
+- `400` -- empty name
+- `404` -- unknown person id
+
+---
+
+### `GET /people/suggest`
+
+Autocomplete: distinct named-person display names containing a
+prefix/substring, most-common first. Same shape as `GET /places`.
+
+**Query parameters**
+
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| `q` | str | `""` | -- | Case-insensitive substring filter |
+| `limit` | int | `10` | 1--50 | Maximum number of suggestions returned |
+
+**Response:** `list[str]` -- person names, e.g. `["Grandma"]`.
+
+---
+
 ### `GET /upload`
 
 Serves a self-contained, mobile-first HTML page for bulk-uploading photos and
@@ -381,6 +429,8 @@ passed through unchanged.
 | `tags` | list[str] | `[]` | Arbitrary user-defined tags |
 | `trashed_at` | datetime \| null | `null` | Set by `DELETE /media/{id}` (soft-delete path) when the item is moved to `/fs/.trash/`; cleared by `POST /media/{id}/restore`. Trashed items stay in the index (recoverable, listed by `GET /media/trash`) but are excluded from `GET /media`, `GET /stats`, and every display producer. |
 | `trash_path` | str \| null | `null` | Relative path under `/fs/.trash/` where a trashed item's file currently lives; `null` when not trashed. New fields default to `null` so index lines written before this field existed still parse unchanged. |
+| `person_ids` | list[str] | `[]` | IDs of detected `Person` records (see "Face detection and search by person" below); populated asynchronously by the background face worker, not at ingest time |
+| `faces_processed` | bool | `false` | Whether the background face worker has attempted detection on this item at least once |
 
 ### `MediaMetadata`
 
@@ -442,6 +492,52 @@ package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
   stays `null`.
 - `meta.place` feeds `GET /media?q=`, `GET /stats` (`by_place`), and
   `GET /places` (autocomplete) -- see those endpoints above.
+
+---
+
+### Face detection and search by person
+
+Faces are detected and clustered into people entirely server-side, entirely
+offline, and entirely off the request path.
+
+- **Stack:** `insightface` (RetinaFace detector + ArcFace 512-d embedder,
+  `buffalo_s` model pack) on CPU via `onnxruntime`. Both live under a
+  dedicated `faces` optional extra in `pyproject.toml`, installed on the
+  server only with `uv sync --extra faces`. The Pi display never installs
+  it and `malmberg_display` never imports `malmberg_server.faces.detect` --
+  the display's dashboard only talks to the server's `/people*` endpoints
+  over HTTP, same as it does for `/places`.
+- The model-pack import is best-effort (`malmberg_server.faces.detect`,
+  `try`/`except ImportError`, mirroring `reverse_geocode`): if the extra is
+  not installed, or model load / a single detection call fails for any
+  reason, a warning is logged and `detect_faces()` returns `[]` -- it never
+  raises into its caller.
+- **Background processing, never inline:** `malmberg_server.faces.worker`
+  runs as an asyncio background task (started from the server's FastAPI
+  startup event), sweeping the media index in small batches for items with
+  `faces_processed == False`. Each item's actual `detect_faces()` call runs
+  in a thread executor (`loop.run_in_executor`), so the event loop -- and
+  uploads -- are never blocked on the ML model. `POST /upload` always
+  returns immediately; faces fill in afterward.
+- **Grouping:** `malmberg_server.faces.people.PersonStore` does simple
+  online nearest-centroid clustering by cosine similarity (threshold
+  `0.5`) against each existing person's running-average embedding centroid
+  -- adequate for a personal library of hundreds of photos, no heavyweight
+  clustering library needed. A face that doesn't match any existing person
+  closely enough starts a new, initially-unnamed, `Person`. Persisted as
+  JSON-lines at `logs/people.jsonl` (same pattern as `logs/playlists.json`
+  / `logs/media-index.jsonl`).
+- Each `MediaItem` carries `person_ids: list[str]` (people detected in it)
+  and `faces_processed: bool` (whether the worker has looked at it yet).
+  These are plain new fields with safe defaults (`[]` / `false`), not part
+  of `MediaMetadata`'s schema-refresh cycle -- face processing is
+  comparatively expensive, so it is only ever done by the background
+  worker, never by the lazy per-request metadata refresh described above.
+- `person_ids` (resolved to names via `PersonStore`) feed `GET /media?q=`,
+  `GET /stats` (`by_person`), `GET /people`, and `GET /people/suggest` --
+  see those endpoints above. `POST /control/play-query?q=<name>` plays a
+  named person's photos on the frame exactly like it does for a place or
+  year, since person names are matched by the same `_matches_query`.
 
 ---
 
@@ -575,6 +671,9 @@ below responds `503`.
 | `GET /media/{id}/info` | `GET /media/{id}/info` |
 | `GET /stats` | `GET /stats` |
 | `GET /places` | `GET /places` (query params passed through) |
+| `GET /people` | `GET /people` |
+| `POST /people/{id}/name` | `POST /people/{id}/name` |
+| `GET /people/suggest` | `GET /people/suggest` (query params passed through) |
 | `DELETE /media/{id}` | `DELETE /media/{id}` (`?permanent=` passed through) |
 | `POST /media/{id}/restore` | `POST /media/{id}/restore` |
 | `POST /media/bulk-delete` | `POST /media/bulk-delete` |

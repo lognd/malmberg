@@ -61,6 +61,11 @@ privacy = [
 geocode = [
     "reverse_geocoder>=1.5.1",
 ]
+faces = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.18.0",
+    "numpy>=1.24.0",
+]
 all = [
     "malmberg[display,web-overlays]",
 ]

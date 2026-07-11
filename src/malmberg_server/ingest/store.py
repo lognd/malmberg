@@ -10,6 +10,7 @@ from typani.result import Err, Ok, Result
 
 from malmberg_core.logging import get_logger
 from malmberg_core.models import MediaItem, MediaPage
+from malmberg_server.faces.people import PersonStore
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import META_SCHEMA_VERSION, extract_exif
 
@@ -210,6 +211,7 @@ class MediaStore:
         sort: str = "id",
         media_root: Optional[Path] = None,
         q: Optional[str] = None,
+        people: Optional["PersonStore"] = None,
     ) -> MediaPage:
         """Return a paginated slice of the media index.
 
@@ -219,8 +221,9 @@ class MediaStore:
         page with stale metadata are refreshed in place before being served.
         *q*, if given, filters to items whose filename contains *q*
         (case-insensitive), whose ``meta.taken_at`` year equals *q* when *q*
-        is a 4-digit year, or whose ``meta.place`` contains *q*
-        (case-insensitive).
+        is a 4-digit year, whose ``meta.place`` contains *q*
+        (case-insensitive), or (when *people* is given) whose detected
+        person(s) have a name containing *q*.
         """
         all_items = [
             it
@@ -228,7 +231,9 @@ class MediaStore:
             if it.trashed_at is None and not (skip_hidden and it.do_not_display)
         ]
         if q:
-            all_items = [it for it in all_items if self._matches_query(it, q)]
+            all_items = [
+                it for it in all_items if self._matches_query(it, q, people=people)
+            ]
         if sort == "recent":
             all_items.sort(
                 key=lambda it: it.meta.taken_at or it.meta.ingest_at, reverse=True
@@ -314,7 +319,31 @@ class MediaStore:
         """Return True if any stored item has the given SHA-256 digest."""
         return any(it.meta.sha256 == digest for it in self._items.values())
 
-    def stats(self, *, skip_hidden: bool = True) -> dict:
+    def pending_face_ids(self, limit: int) -> list[str]:
+        """Return up to *limit* item ids not yet visited by the face worker.
+
+        Excludes trashed items. Used by malmberg_server.faces.worker to walk
+        the library without the worker reaching into private state.
+        """
+        return [
+            it.id
+            for it in self._items.values()
+            if it.trashed_at is None and not it.faces_processed
+        ][:limit]
+
+    def counts_by_person(self, *, skip_hidden: bool = True) -> dict[str, int]:
+        """Return person_id -> distinct-photo count, for the /people listing."""
+        counts: dict[str, int] = {}
+        for it in self._items.values():
+            if it.trashed_at is not None or (skip_hidden and it.do_not_display):
+                continue
+            for pid in it.person_ids:
+                counts[pid] = counts.get(pid, 0) + 1
+        return counts
+
+    def stats(
+        self, *, skip_hidden: bool = True, people: Optional["PersonStore"] = None
+    ) -> dict:
         """Summarize the library: counts by kind, taken_at date range, by-year.
 
         Returns a dict with keys ``total``, ``images``, ``videos``,
@@ -323,7 +352,9 @@ class MediaStore:
         4-digit year string -> count) and ``by_month`` (a dict of
         ``YYYY-MM`` string -> count), both for dated items only, and
         ``by_place`` (a dict of place label -> count, for items with a
-        ``meta.place``, sorted by count descending).
+        ``meta.place``, sorted by count descending), and, when *people* is
+        given, ``by_person`` (a dict of named-person display name -> photo
+        count, sorted by count descending; unnamed persons are omitted).
         """
         items = [
             it
@@ -345,7 +376,7 @@ class MediaStore:
         for it in items:
             if it.meta.place:
                 by_place[it.meta.place] = by_place.get(it.meta.place, 0) + 1
-        return {
+        result = {
             "total": len(items),
             "images": images,
             "videos": videos,
@@ -356,6 +387,18 @@ class MediaStore:
             "by_month": dict(sorted(by_month.items())),
             "by_place": dict(sorted(by_place.items(), key=lambda kv: (-kv[1], kv[0]))),
         }
+        if people is not None:
+            by_person: dict[str, int] = {}
+            for it in items:
+                for pid in it.person_ids:
+                    person = people.get(pid)
+                    if person is None or not person.name:
+                        continue
+                    by_person[person.name] = by_person.get(person.name, 0) + 1
+            result["by_person"] = dict(
+                sorted(by_person.items(), key=lambda kv: (-kv[1], kv[0]))
+            )
+        return result
 
     def places(
         self, *, q: str = "", limit: int = 10, skip_hidden: bool = True
@@ -370,8 +413,15 @@ class MediaStore:
         return matches[:limit]
 
     @staticmethod
-    def _matches_query(item: MediaItem, q: str) -> bool:
-        """Return True if *item* matches search query *q* (filename, year, or place)."""
+    def _matches_query(
+        item: MediaItem, q: str, *, people: Optional["PersonStore"] = None
+    ) -> bool:
+        """Return True if *item* matches search query *q*.
+
+        Matches on filename substring, a 4-digit ``meta.taken_at`` year,
+        ``meta.place`` substring, or (when *people* is given) the name of a
+        person detected in this item.
+        """
         needle = q.strip().lower()
         if needle in item.filename.lower():
             return True
@@ -384,6 +434,11 @@ class MediaStore:
             return True
         if item.meta.place is not None and needle in item.meta.place.lower():
             return True
+        if people is not None and item.person_ids:
+            for pid in item.person_ids:
+                person = people.get(pid)
+                if person is not None and person.name and needle in person.name.lower():
+                    return True
         return False
 
     def __len__(self) -> int:

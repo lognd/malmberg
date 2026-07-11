@@ -383,6 +383,24 @@ def build_app(
         """Proxy: place-name autocomplete suggestions from the paired server."""
         return await _proxy_json("GET", "/places", params=dict(request.query_params))
 
+    @app.get("/people")
+    async def proxy_people() -> object:
+        """Proxy: detected people (id, name, count, sample thumbnail)."""
+        return await _proxy_json("GET", "/people")
+
+    @app.post("/people/{person_id}/name")
+    async def proxy_name_person(person_id: str, request: Request) -> object:
+        """Proxy: assign or change a detected person's display name."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/people/{person_id}/name", json=body)
+
+    @app.get("/people/suggest")
+    async def proxy_suggest_people(request: Request) -> object:
+        """Proxy: person-name autocomplete suggestions from the paired server."""
+        return await _proxy_json(
+            "GET", "/people/suggest", params=dict(request.query_params)
+        )
+
     @app.delete("/media/{item_id}")
     async def proxy_delete_media(
         item_id: str, permanent: bool = Query(default=False)

@@ -68,6 +68,17 @@ class MediaItem(BaseModel):
     Set together with trashed_at when an item is soft-deleted; cleared on
     restore. None for items that were never trashed.
     """
+    person_ids: list[str] = Field(default_factory=list)
+    """IDs of Person records (see malmberg_server.faces.people) whose face was
+    detected in this item. Populated asynchronously by the server's
+    background face worker; empty until processed or if no faces are found.
+    Absent on items indexed before the person feature existed, in which case
+    this simply defaults to [] on load -- no schema migration needed."""
+    faces_processed: bool = False
+    """True once the background face worker has attempted detection on this
+    item at least once (independent of whether any faces were found). Lets
+    the worker skip items it has already looked at without a separate index.
+    """
 
 
 class MediaPage(BaseModel):

@@ -21,6 +21,8 @@ from malmberg_core.models import HidePolicy, MediaItem, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
+from malmberg_server.faces.people import PersonStore
+from malmberg_server.faces.worker import run_face_worker
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import make_thumbnail
 from malmberg_server.ingest.playlists import PlaylistStore
@@ -84,6 +86,12 @@ class BulkPlaylistAddRequest(BaseModel):
     ids: list[str]
 
 
+class PersonNameRequest(BaseModel):
+    """Request body for POST /people/{person_id}/name."""
+
+    name: str
+
+
 class ServerStatus(BaseModel):
     """Response body for GET /status."""
 
@@ -127,6 +135,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     _start = datetime.now(timezone.utc)
     _store = store if store is not None else MediaStore()
     _playlists = PlaylistStore()
+    _people = PersonStore()
     # Named displays for multi-display control (a lone display_url counts as one).
     _displays: dict[str, str] = (
         dict(cfg.displays)
@@ -154,12 +163,29 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     def _playlists_path() -> Path:
         return cfg.fs_root / "logs" / "playlists.json"
 
+    def _people_path() -> Path:
+        return cfg.fs_root / "logs" / "people.jsonl"
+
     _playlists.load_from_disk(_playlists_path())
+    _people.load_from_disk(_people_path())
 
     def _save_playlists() -> None:
         save = _playlists.save_to_disk(_playlists_path())
         if save.is_err:
             _log.error("Failed to persist playlists")
+
+    @app.on_event("startup")
+    async def _start_face_worker() -> None:
+        """Kick off the background face-detection walker (see faces.worker).
+
+        Runs off the request path: uploads return immediately and this task
+        fills in person_ids asynchronously, batch by batch, forever.
+        """
+        asyncio.create_task(
+            run_face_worker(
+                _store, _people, _media_root(), _index_path(), _people_path()
+            )
+        )
 
     @app.get("/")
     async def root() -> Tag:
@@ -209,6 +235,7 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             sort=sort,
             media_root=_media_root(),
             q=q,
+            people=_people,
         )
         if _store.pop_dirty():
             save = _store.save_to_disk(_index_path())
@@ -218,8 +245,9 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
 
     @app.get("/stats")
     async def media_stats() -> dict:
-        """Report library-wide counts, date range, and per-year/place distribution."""
-        return _store.stats()
+        """Report library-wide counts, date range, and per-year/place/person
+        distribution."""
+        return _store.stats(people=_people)
 
     @app.get("/places")
     async def list_places(
@@ -228,6 +256,35 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
     ) -> list[str]:
         """Autocomplete: distinct place labels containing *q*, most-common first."""
         return _store.places(q=q, limit=limit)
+
+    @app.get("/people")
+    async def list_people() -> list[dict]:
+        """List detected people: id, name (None if unnamed), photo count,
+        sample thumbnail id."""
+        return _people.list(counts_by_person=_store.counts_by_person())
+
+    @app.post("/people/{person_id}/name")
+    async def name_person(person_id: str, body: PersonNameRequest) -> dict:
+        """Assign or change the display name of a detected person."""
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name required")
+        result = _people.rename(person_id, name)
+        if result.is_err:
+            raise HTTPException(status_code=404, detail="Person not found")
+        save = _people.save_to_disk(_people_path())
+        if save.is_err:
+            _log.error("Failed to persist people index after rename")
+        return result.danger_ok.model_dump(mode="json")
+
+    @app.get("/people/suggest")
+    async def suggest_people(
+        q: str = Query(default=""),
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> list[str]:
+        """Autocomplete: distinct named-person names containing *q*,
+        most-common first."""
+        return _people.suggest(q=q, limit=limit)
 
     @app.get("/media/trash")
     async def list_trash(
@@ -502,7 +559,9 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         *loop* false (default) plays the match once and returns to the whole
         library; true repeats it until "play all" is pressed.
         """
-        page = _store.list(page=1, page_size=500, skip_hidden=True, sort="recent", q=q)
+        page = _store.list(
+            page=1, page_size=500, skip_hidden=True, sort="recent", q=q, people=_people
+        )
         ids = [it.id for it in page.items]
         if not ids:
             raise HTTPException(status_code=404, detail="No photos match that filter")
