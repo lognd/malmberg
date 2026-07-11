@@ -89,7 +89,9 @@ def test_media_thumbnail(client: TestClient) -> None:
 
     buf = BytesIO()
     Image.new("RGB", (1200, 900), (120, 60, 30)).save(buf, "JPEG")
-    r = client.post("/upload", files={"file": ("photo.jpg", buf.getvalue(), "image/jpeg")})
+    r = client.post(
+        "/upload", files={"file": ("photo.jpg", buf.getvalue(), "image/jpeg")}
+    )
     item_id = r.json()["id"]
 
     t = client.get(f"/media/{item_id}/thumb")
@@ -237,6 +239,26 @@ def test_control_endpoints_503_without_display_url(client: TestClient) -> None:
     assert r.status_code == 503
 
 
+def test_control_play_all_503_without_display_url(client: TestClient) -> None:
+    r = client.post("/control/play-all")
+    assert r.status_code == 503
+
+
+def test_control_show_503_without_display_url(client: TestClient) -> None:
+    r = client.post("/control/show/some-id")
+    assert r.status_code == 503
+
+
+def test_control_playlist_without_display_url(client: TestClient) -> None:
+    # Unknown playlist should 404 before ever consulting display_url.
+    r = client.post("/control/playlist/does-not-exist")
+    assert r.status_code == 404
+
+    client.post("/playlists", json={"name": "trip"})
+    r = client.post("/control/playlist/trip")
+    assert r.status_code == 503
+
+
 def test_control_status_proxies_to_display(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -259,7 +281,9 @@ def test_control_status_proxies_to_display(
         async def __aexit__(self, *exc) -> None:
             return None
 
-        async def request(self, method: str, url: str) -> _FakeResponse:
+        async def request(
+            self, method: str, url: str, json: object = None
+        ) -> _FakeResponse:
             assert method == "GET"
             assert url.endswith("/status")
             return _FakeResponse()
@@ -295,3 +319,172 @@ def test_server_config_display_url_default_none() -> None:
 def test_server_config_display_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MALMBERG_DISPLAY_URL", "http://10.0.0.5:8443")
     assert ServerConfig._env_overrides()["display_url"] == "http://10.0.0.5:8443"
+
+
+# ----------------------------------------------------------------------
+# Permanent delete
+# ----------------------------------------------------------------------
+
+
+def test_permanent_delete_removes_file_and_index_entry(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.post("/upload", files={"file": ("perm.jpg", b"perm data", "image/jpeg")})
+    item = r.json()
+    item_id = item["id"]
+    media_path = tmp_path / "media" / item["server_path"]
+    assert media_path.is_file()
+
+    r2 = client.delete(f"/media/{item_id}", params={"permanent": "true"})
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "deleted"
+    assert not media_path.is_file()
+
+    r3 = client.get(f"/media/{item_id}")
+    assert r3.status_code == 404
+
+    # Should not have landed in trash.
+    trash_files = list((tmp_path / ".trash").rglob("*"))
+    assert all(not f.is_file() for f in trash_files)
+
+
+def test_permanent_delete_missing_item_404s(client: TestClient) -> None:
+    r = client.delete("/media/does-not-exist", params={"permanent": "true"})
+    assert r.status_code == 404
+
+
+def test_soft_delete_still_recoverable_in_trash(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.post("/upload", files={"file": ("soft.jpg", b"soft data", "image/jpeg")})
+    item_id = r.json()["id"]
+    r2 = client.delete(f"/media/{item_id}")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "trashed"
+    trash_files = [f for f in (tmp_path / ".trash").rglob("*") if f.is_file()]
+    assert len(trash_files) == 1
+
+
+def test_media_info_returns_full_item(client: TestClient) -> None:
+    r = client.post("/upload", files={"file": ("info.jpg", b"info data", "image/jpeg")})
+    item_id = r.json()["id"]
+    r2 = client.get(f"/media/{item_id}/info")
+    assert r2.status_code == 200
+    data = r2.json()
+    assert data["id"] == item_id
+    assert data["filename"] == "info.jpg"
+    assert "meta" in data
+
+
+def test_media_info_missing_404s(client: TestClient) -> None:
+    r = client.get("/media/does-not-exist/info")
+    assert r.status_code == 404
+
+
+# ----------------------------------------------------------------------
+# Bulk delete
+# ----------------------------------------------------------------------
+
+
+def test_bulk_delete_soft(client: TestClient, tmp_path: Path) -> None:
+    ids = []
+    for name in ("a.jpg", "b.jpg"):
+        r = client.post("/upload", files={"file": (name, name.encode(), "image/jpeg")})
+        ids.append(r.json()["id"])
+
+    r = client.post("/media/bulk-delete", json={"ids": ids, "permanent": False})
+    assert r.status_code == 200
+    data = r.json()
+    assert sorted(data["deleted"]) == sorted(ids)
+    assert data["failed"] == []
+
+    trash_files = [f for f in (tmp_path / ".trash").rglob("*") if f.is_file()]
+    assert len(trash_files) == 2
+
+
+def test_bulk_delete_permanent_and_unknown_ids(
+    client: TestClient, tmp_path: Path
+) -> None:
+    r = client.post("/upload", files={"file": ("c.jpg", b"ccc", "image/jpeg")})
+    item_id = r.json()["id"]
+
+    r2 = client.post(
+        "/media/bulk-delete",
+        json={"ids": [item_id, "unknown-id"], "permanent": True},
+    )
+    assert r2.status_code == 200
+    data = r2.json()
+    assert data["deleted"] == [item_id]
+    assert data["failed"] == ["unknown-id"]
+
+    trash_files = [f for f in (tmp_path / ".trash").rglob("*") if f.is_file()]
+    assert trash_files == []
+
+
+# ----------------------------------------------------------------------
+# Playlists (programmed slideshows)
+# ----------------------------------------------------------------------
+
+
+def test_playlist_crud_lifecycle(client: TestClient, tmp_path: Path) -> None:
+    r = client.get("/playlists")
+    assert r.status_code == 200
+    assert r.json() == []
+
+    r = client.post("/playlists", json={"name": "vacation"})
+    assert r.status_code == 200
+    assert r.json() == {"name": "vacation", "count": 0}
+
+    # Duplicate name is rejected.
+    r = client.post("/playlists", json={"name": "vacation"})
+    assert r.status_code == 409
+
+    r = client.get("/playlists")
+    assert r.json() == [{"name": "vacation", "count": 0}]
+
+    up = client.post("/upload", files={"file": ("v.jpg", b"vvv", "image/jpeg")})
+    item_id = up.json()["id"]
+
+    r = client.post("/playlists/vacation/items", json={"item_id": item_id})
+    assert r.status_code == 200
+    assert r.json() == {"name": "vacation", "count": 1}
+
+    # Adding the same item again is a no-op (no duplicates).
+    r = client.post("/playlists/vacation/items", json={"item_id": item_id})
+    assert r.json()["count"] == 1
+
+    r = client.delete(f"/playlists/vacation/items/{item_id}")
+    assert r.status_code == 200
+    assert r.json()["count"] == 0
+
+    r = client.delete("/playlists/vacation")
+    assert r.status_code == 200
+    r = client.get("/playlists")
+    assert r.json() == []
+
+    r = client.delete("/playlists/vacation")
+    assert r.status_code == 404
+
+
+def test_playlist_items_bulk_add(client: TestClient) -> None:
+    client.post("/playlists", json={"name": "family"})
+    ids = []
+    for name in ("x.jpg", "y.jpg"):
+        r = client.post("/upload", files={"file": (name, name.encode(), "image/jpeg")})
+        ids.append(r.json()["id"])
+
+    r = client.post("/playlists/family/items/bulk", json={"ids": ids})
+    assert r.status_code == 200
+    assert r.json() == {"name": "family", "count": 2}
+
+
+def test_playlist_add_item_missing_playlist_404s(client: TestClient) -> None:
+    r = client.post("/playlists/nope/items", json={"item_id": "some-id"})
+    assert r.status_code == 404
+
+
+def test_playlists_persist_to_disk(client: TestClient, tmp_path: Path) -> None:
+    client.post("/playlists", json={"name": "persisted"})
+    playlists_path = tmp_path / "logs" / "playlists.json"
+    assert playlists_path.is_file()
+    assert "persisted" in playlists_path.read_text()

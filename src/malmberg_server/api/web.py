@@ -3,12 +3,18 @@
 The page is single-file (inline CSS/JS, no external CDNs/fonts/scripts)
 because the server box is often offline from the wider internet. It is
 the single source of truth for the web UI: upload, stats, search/browse,
-and slideshow controls all live here.
+lightbox details, bulk selection, programmed slideshows, and live
+display controls all live here.
 
 Styling follows the Gruvbox Dark palette and monospace-forward,
 terminal-flavored aesthetic used across the owner's other projects
 (see logand.app docs/design/09-design-system.md), with system
 monospace fallbacks since no external fonts may be loaded.
+
+The page is deliberately split into two visually distinct domains so a
+non-technical user cannot confuse them: a "Control the photo frame"
+area (live display controls) and a "Manage the photo library" area
+(stored files: upload, browse, delete, programmed slideshows).
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     --warn: #d79921;
     --err: #fb4934;
     --aqua: #8ec07c;
+    --purple: #d3869b;
     --border: #504945;
   }
   * { box-sizing: border-box; }
@@ -51,6 +58,26 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     letter-spacing: 0.01em;
     margin: 0.25rem 0 1rem;
     color: var(--text);
+  }
+  .domain {
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 0.9rem 0.2rem;
+    margin-bottom: 1.4rem;
+  }
+  .domain-display { border-color: var(--accent); }
+  .domain-library { border-color: var(--aqua); }
+  .domain-head {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.2rem;
+  }
+  .domain-display .domain-head { color: var(--accent); }
+  .domain-library .domain-head { color: var(--aqua); }
+  .domain-sub {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-bottom: 0.9rem;
   }
   section {
     background: var(--panel);
@@ -207,6 +234,33 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   .row.err .bar-fill { background: var(--err); }
   .row.err .status { color: var(--err); }
   /* Now playing / controls */
+  #now-playing-row {
+    display: flex;
+    gap: 0.85rem;
+    align-items: center;
+  }
+  #now-thumb-wrap {
+    width: 72px;
+    height: 72px;
+    flex: 0 0 auto;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #now-thumb-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  #now-thumb-wrap .placeholder {
+    color: var(--muted);
+    font-size: 1.4rem;
+  }
   #now-playing {
     font-size: 1rem;
     font-weight: 700;
@@ -234,11 +288,17 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     background: var(--bg-alt);
     color: var(--text);
     cursor: pointer;
+    transition: opacity 0.1s, transform 0.05s;
   }
-  .controls button:active { opacity: 0.8; }
+  .controls button:active { opacity: 0.8; transform: scale(0.98); }
   .controls button:disabled {
     color: var(--muted);
     cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .controls button.busy {
+    opacity: 0.6;
+    cursor: wait;
   }
   #control-hint {
     margin-top: 0.6rem;
@@ -247,7 +307,50 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     display: none;
   }
   #control-hint.show { display: block; }
-  /* Browse / search */
+  #play-all-row { margin-top: 0.7rem; }
+  #play-all-row button {
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-alt);
+    color: var(--aqua);
+    cursor: pointer;
+  }
+  /* Toasts */
+  #toast-stack {
+    position: fixed;
+    left: 50%;
+    bottom: 1rem;
+    transform: translateX(-50%);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: center;
+    width: calc(100% - 2rem);
+    max-width: 500px;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.85rem;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok { border-left-color: var(--ok); }
+  .toast.err { border-left-color: var(--err); }
+  /* Search / browse */
   .search-row {
     display: flex;
     gap: 0.5rem;
@@ -266,7 +369,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     border-radius: 6px;
   }
   #search-input::placeholder { color: var(--muted); }
-  #refresh-btn {
+  #refresh-btn, #select-toggle-btn {
     padding: 0 1rem;
     min-height: 44px;
     font-size: 0.85rem;
@@ -275,6 +378,11 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     background: var(--bg-alt);
     color: var(--text);
     cursor: pointer;
+  }
+  #select-toggle-btn.active {
+    color: #282828;
+    background: var(--aqua);
+    border-color: var(--aqua);
   }
   #results-summary {
     font-size: 0.82rem;
@@ -289,6 +397,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   }
   .tile {
     position: relative;
+    cursor: pointer;
   }
   .tile img {
     width: 100%;
@@ -318,6 +427,31 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     justify-content: center;
   }
   .tile .delete-btn:active { background: var(--err); color: #282828; }
+  .tile .select-mark {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid rgba(235, 219, 178, 0.7);
+    background: rgba(40, 40, 40, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+  .tile.selected .select-mark {
+    background: var(--aqua);
+    border-color: var(--aqua);
+    color: #282828;
+  }
+  .tile.selected img {
+    outline: 3px solid var(--aqua);
+    outline-offset: -3px;
+  }
   .pagination {
     display: flex;
     align-items: center;
@@ -347,6 +481,274 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     font-size: 0.82rem;
     color: var(--muted);
   }
+  /* Bulk action bar */
+  #bulk-bar {
+    display: none;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: 6px;
+    border: 1px solid var(--aqua);
+    background: var(--bg-alt);
+  }
+  #bulk-bar.show { display: flex; }
+  #bulk-count {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--aqua);
+    margin-right: auto;
+  }
+  #bulk-bar button {
+    min-height: 40px;
+    padding: 0 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #bulk-hard-delete { color: var(--err); border-color: var(--err); }
+  #bulk-soft-delete { color: var(--warn); border-color: var(--warn); }
+  #bulk-add-playlist { color: var(--aqua); border-color: var(--aqua); }
+  /* Playlists */
+  .playlist-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.5rem;
+  }
+  .playlist-row .pl-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+  .playlist-row .pl-count {
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+  .playlist-row .pl-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .playlist-row button {
+    min-height: 38px;
+    padding: 0 0.7rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .playlist-row .pl-play { color: var(--accent); border-color: var(--accent); }
+  .playlist-row .pl-delete { color: var(--err); border-color: var(--err); }
+  #new-playlist-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+  }
+  #new-playlist-name {
+    flex: 1 1 auto;
+    min-height: 44px;
+    padding: 0 0.8rem;
+    font-family: inherit;
+    font-size: 0.9rem;
+    background: var(--bg-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  #new-playlist-btn {
+    min-height: 44px;
+    padding: 0 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--aqua);
+    background: var(--bg-alt);
+    color: var(--aqua);
+    cursor: pointer;
+  }
+  #playlists-empty {
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  /* Modal / lightbox */
+  #modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 18, 16, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+  }
+  #modal-backdrop.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #modal-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    max-width: 620px;
+    width: 100%;
+    max-height: 92vh;
+    overflow-y: auto;
+    transform: scale(0.94);
+    transition: transform 0.18s ease;
+    position: relative;
+  }
+  #modal-backdrop.show #modal-card {
+    transform: scale(1);
+  }
+  #modal-close {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: var(--bg-alt);
+    color: var(--text);
+    font-size: 1.2rem;
+    font-weight: 700;
+    cursor: pointer;
+    z-index: 2;
+  }
+  #modal-img-wrap {
+    background: #1d1a17;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-height: 45vh;
+    overflow: hidden;
+    border-radius: 10px 10px 0 0;
+  }
+  #modal-img-wrap img {
+    max-width: 100%;
+    max-height: 45vh;
+    display: block;
+  }
+  #modal-body {
+    padding: 1rem 1.1rem 1.2rem;
+  }
+  #modal-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin-bottom: 0.6rem;
+    word-break: break-all;
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 0.8rem;
+    font-size: 0.82rem;
+    margin-bottom: 0.9rem;
+  }
+  .detail-grid dt {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.72rem;
+    padding-top: 0.1rem;
+  }
+  .detail-grid dd {
+    margin: 0;
+    word-break: break-all;
+  }
+  .modal-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+  }
+  .modal-actions button {
+    min-height: 46px;
+    padding: 0 1rem;
+    font-size: 0.88rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+  }
+  #act-show { color: var(--accent); border-color: var(--accent); }
+  #act-add-playlist { color: var(--aqua); border-color: var(--aqua); }
+  #act-soft-delete { color: var(--warn); border-color: var(--warn); }
+  #act-hard-delete { color: var(--err); border-color: var(--err); }
+  /* Playlist picker (inline, inside modal or bulk bar) */
+  #playlist-picker {
+    display: none;
+    margin-top: 0.5rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.7rem;
+  }
+  #playlist-picker.show { display: block; }
+  #playlist-picker .pp-existing {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.6rem;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+  #playlist-picker button.pp-item {
+    text-align: left;
+    min-height: 40px;
+    padding: 0 0.7rem;
+    font-size: 0.82rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #playlist-picker .pp-new-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+  #playlist-picker input[type="text"] {
+    flex: 1 1 auto;
+    min-height: 40px;
+    padding: 0 0.6rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  #playlist-picker .pp-create {
+    min-height: 40px;
+    padding: 0 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--aqua);
+    background: var(--panel);
+    color: var(--aqua);
+    cursor: pointer;
+  }
   footer {
     text-align: center;
     color: var(--muted);
@@ -359,59 +761,151 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
 <main>
   <h1>Malmberg Dashboard</h1>
 
-  <section>
-    <h2>Library</h2>
-    <div id="stats-count">-- <span class="label">photos and videos</span></div>
-    <div class="stats-grid" id="stats-grid"></div>
-    <div id="by-year"></div>
-  </section>
+  <div class="domain domain-display">
+    <div class="domain-head">Control the photo frame</div>
+    <div class="domain-sub">
+      These buttons control what is showing right now on the TV / photo
+      frame. Changes here happen immediately on the display.
+    </div>
 
-  <section>
-    <h2>Upload</h2>
-    <div id="dropzone">
-      <div>Drag and drop photos or videos here</div>
-      <div class="hint">or</div>
-      <button id="picker-btn" type="button">Choose files</button>
-      <input id="file-input" type="file" multiple accept="image/*,video/*">
-    </div>
-    <div id="upload-summary"></div>
-    <div id="upload-list"></div>
-  </section>
+    <section>
+      <h2>Now showing</h2>
+      <div id="now-playing-row">
+        <div id="now-thumb-wrap">
+          <span class="placeholder">--</span>
+        </div>
+        <div>
+          <div id="now-playing">Loading...</div>
+          <div id="now-meta"></div>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="btn-prev" type="button">Previous</button>
+        <button id="btn-pause" type="button">Pause</button>
+        <button id="btn-next" type="button">Next</button>
+      </div>
+      <div id="play-all-row">
+        <button id="btn-play-all" type="button">Play whole library</button>
+      </div>
+      <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
+      on the server to enable.</div>
+    </section>
+  </div>
 
-  <section>
-    <h2>Now playing</h2>
-    <div id="now-playing">Loading...</div>
-    <div id="now-meta"></div>
-    <div class="controls">
-      <button id="btn-prev" type="button">Previous</button>
-      <button id="btn-pause" type="button">Pause</button>
-      <button id="btn-next" type="button">Next</button>
+  <div class="domain domain-library">
+    <div class="domain-head">Manage the photo library</div>
+    <div class="domain-sub">
+      This is where photos and videos are stored on the server. Nothing
+      here changes what is on the TV until you press a "play" or
+      "display it now" button.
     </div>
-    <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
-    on the server to enable.</div>
-  </section>
 
-  <section>
-    <h2>Browse photos</h2>
-    <div class="search-row">
-      <input id="search-input" type="text"
-        placeholder="Search by filename or year (e.g. 2006)">
-      <button id="refresh-btn" type="button">Refresh</button>
-    </div>
-    <div id="results-summary"></div>
-    <div class="grid" id="grid"></div>
-    <div class="pagination">
-      <button id="page-prev" type="button">Previous</button>
-      <span class="page-info" id="page-info"></span>
-      <button id="page-next" type="button">Next</button>
-    </div>
-  </section>
+    <section>
+      <h2>Library</h2>
+      <div id="stats-count">-- <span class="label">photos and videos</span></div>
+      <div class="stats-grid" id="stats-grid"></div>
+      <div id="by-year"></div>
+    </section>
+
+    <section>
+      <h2>Upload</h2>
+      <div id="dropzone">
+        <div>Drag and drop photos or videos here</div>
+        <div class="hint">or</div>
+        <button id="picker-btn" type="button">Choose files</button>
+        <input id="file-input" type="file" multiple accept="image/*,video/*">
+      </div>
+      <div id="upload-summary"></div>
+      <div id="upload-list"></div>
+    </section>
+
+    <section>
+      <h2>Browse photos</h2>
+      <div class="search-row">
+        <input id="search-input" type="text"
+          placeholder="Search by filename or year (e.g. 2006)">
+        <button id="refresh-btn" type="button">Refresh</button>
+        <button id="select-toggle-btn" type="button">Select</button>
+      </div>
+      <div id="results-summary"></div>
+      <div id="bulk-bar">
+        <span id="bulk-count">0 selected</span>
+        <button id="bulk-select-all" type="button">Select all on page</button>
+        <button id="bulk-add-playlist" type="button">Add to slideshow</button>
+        <button id="bulk-soft-delete" type="button">Delete (recoverable)</button>
+        <button id="bulk-hard-delete" type="button">Delete permanently</button>
+        <button id="bulk-clear" type="button">Clear selection</button>
+      </div>
+      <div id="bulk-playlist-picker"></div>
+      <div class="grid" id="grid"></div>
+      <div class="pagination">
+        <button id="page-prev" type="button">Previous</button>
+        <span class="page-info" id="page-info"></span>
+        <button id="page-next" type="button">Next</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Programmed slideshows</h2>
+      <div id="playlists-list"></div>
+      <div id="playlists-empty">No programmed slideshows yet.</div>
+      <div id="new-playlist-row">
+        <input id="new-playlist-name" type="text"
+          placeholder="New slideshow name">
+        <button id="new-playlist-btn" type="button">Create</button>
+      </div>
+    </section>
+  </div>
 
   <footer>Malmberg self-hosted photo frame</footer>
 </main>
+
+<div id="toast-stack"></div>
+
+<div id="modal-backdrop">
+  <div id="modal-card">
+    <button id="modal-close" type="button" aria-label="Close">&times;</button>
+    <div id="modal-img-wrap"><img id="modal-img" alt=""></div>
+    <div id="modal-body">
+      <div id="modal-title"></div>
+      <dl class="detail-grid" id="modal-details"></dl>
+      <div class="modal-actions">
+        <button id="act-show" type="button">Display it now</button>
+        <button id="act-add-playlist" type="button">Add to a slideshow</button>
+        <button id="act-soft-delete" type="button">
+          Delete (recoverable, goes to trash)
+        </button>
+        <button id="act-hard-delete" type="button">
+          Delete permanently (cannot be undone)
+        </button>
+      </div>
+      <div id="playlist-picker"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
   "use strict";
+
+  /* ---- Toasts ---- */
+  var toastStack = document.getElementById("toast-stack");
+
+  function showToast(message, kind) {
+    var el = document.createElement("div");
+    el.className = "toast" + (kind ? " " + kind : "");
+    el.textContent = message;
+    toastStack.appendChild(el);
+    window.requestAnimationFrame(function () {
+      el.className += " show";
+    });
+    window.setTimeout(function () {
+      el.className = el.className.replace(" show", "");
+      window.setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 220);
+    }, 3200);
+  }
 
   /* ---- Stats ---- */
   var statsCount = document.getElementById("stats-count");
@@ -576,19 +1070,41 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     xhr.send(form);
   }
 
-  /* ---- Now playing / controls ---- */
+  /* ---- Now playing / live display controls ---- */
   var nowPlaying = document.getElementById("now-playing");
   var nowMeta = document.getElementById("now-meta");
+  var nowThumbWrap = document.getElementById("now-thumb-wrap");
   var hint = document.getElementById("control-hint");
   var btnPrev = document.getElementById("btn-prev");
   var btnNext = document.getElementById("btn-next");
   var btnPause = document.getElementById("btn-pause");
+  var btnPlayAll = document.getElementById("btn-play-all");
+
+  var lastCurrentItemId = null;
 
   function setControlsDisabled(disabled) {
     btnPrev.disabled = disabled;
     btnNext.disabled = disabled;
     btnPause.disabled = disabled;
+    btnPlayAll.disabled = disabled;
     hint.className = disabled ? "show" : "";
+  }
+
+  function setNowThumb(itemId) {
+    if (itemId === lastCurrentItemId) return;
+    lastCurrentItemId = itemId;
+    nowThumbWrap.innerHTML = "";
+    if (itemId) {
+      var img = document.createElement("img");
+      img.src = "/media/" + itemId + "/thumb?size=160";
+      img.alt = "Now showing";
+      nowThumbWrap.appendChild(img);
+    } else {
+      var ph = document.createElement("span");
+      ph.className = "placeholder";
+      ph.textContent = "--";
+      nowThumbWrap.appendChild(ph);
+    }
   }
 
   function refreshStatus() {
@@ -598,6 +1114,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
           setControlsDisabled(true);
           nowPlaying.textContent = "Display not configured";
           nowMeta.textContent = "";
+          setNowThumb(null);
           return null;
         }
         setControlsDisabled(false);
@@ -611,23 +1128,76 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
           "  -  queue depth " + data.queue_depth +
           "  -  history " + data.history_count;
         btnPause.textContent = data.paused ? "Resume" : "Pause";
+        setNowThumb(data.current_item_id || null);
       })
       .catch(function () {
         setControlsDisabled(true);
         nowPlaying.textContent = "Unable to reach display";
         nowMeta.textContent = "";
+        setNowThumb(null);
       });
   }
 
-  function sendControl(path) {
-    fetch(path, { method: "POST" })
-      .then(function () { refreshStatus(); })
-      .catch(function () { refreshStatus(); });
+  /* Runs a control action with immediate button feedback (busy state,
+     disable while in flight) followed by a toast confirming what
+     happened, then refreshes status so the "now showing" area stays
+     in sync with the display (which preempts immediately). */
+  function runControl(btn, path, method, body, busyText, okMessage) {
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.className += " busy";
+    btn.textContent = busyText;
+
+    var opts = { method: method || "POST" };
+    if (body !== undefined) {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(body);
+    }
+
+    fetch(path, opts)
+      .then(function (r) {
+        if (r.status === 503) {
+          showToast("Display not configured.", "err");
+          return null;
+        }
+        if (!r.ok) {
+          showToast("Could not reach the display. Try again.", "err");
+          return null;
+        }
+        showToast(
+          typeof okMessage === "function" ? okMessage() : okMessage,
+          "ok"
+        );
+        return r.json().catch(function () { return null; });
+      })
+      .catch(function () {
+        showToast("Could not reach the display. Try again.", "err");
+      })
+      .then(function () {
+        btn.disabled = false;
+        btn.className = btn.className.replace(" busy", "");
+        btn.textContent = originalText;
+        refreshStatus();
+      });
   }
 
-  btnPrev.addEventListener("click", function () { sendControl("/control/prev"); });
-  btnNext.addEventListener("click", function () { sendControl("/control/next"); });
-  btnPause.addEventListener("click", function () { sendControl("/control/pause"); });
+  btnPrev.addEventListener("click", function () {
+    runControl(btnPrev, "/control/prev", "POST", undefined,
+      "...", "Skipped to the previous photo.");
+  });
+  btnNext.addEventListener("click", function () {
+    runControl(btnNext, "/control/next", "POST", undefined,
+      "...", "Skipped to the next photo.");
+  });
+  btnPause.addEventListener("click", function () {
+    var willResume = btnPause.textContent === "Resume";
+    runControl(btnPause, "/control/pause", "POST", undefined,
+      "...", willResume ? "Resumed the slideshow." : "Paused the slideshow.");
+  });
+  btnPlayAll.addEventListener("click", function () {
+    runControl(btnPlayAll, "/control/play-all", "POST", undefined,
+      "...", "Now playing the whole library.");
+  });
 
   /* ---- Browse / search grid, server-side paginated ---- */
   var grid = document.getElementById("grid");
@@ -637,10 +1207,119 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   var pagePrev = document.getElementById("page-prev");
   var pageNext = document.getElementById("page-next");
   var pageInfo = document.getElementById("page-info");
+  var selectToggleBtn = document.getElementById("select-toggle-btn");
+  var bulkBar = document.getElementById("bulk-bar");
+  var bulkCount = document.getElementById("bulk-count");
+  var bulkSelectAll = document.getElementById("bulk-select-all");
+  var bulkClear = document.getElementById("bulk-clear");
+  var bulkSoftDelete = document.getElementById("bulk-soft-delete");
+  var bulkHardDelete = document.getElementById("bulk-hard-delete");
+  var bulkAddPlaylist = document.getElementById("bulk-add-playlist");
+  var bulkPlaylistPicker = document.getElementById("bulk-playlist-picker");
 
   var PAGE_SIZE = 24;
-  var state = { page: 1, q: "", hasNext: false, total: 0 };
+  var state = {
+    page: 1, q: "", hasNext: false, total: 0, items: [],
+    selectMode: false, selected: {},
+  };
   var searchDebounce = null;
+
+  function totalPages() {
+    return Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+  }
+
+  function updateBulkBar() {
+    var ids = Object.keys(state.selected);
+    bulkBar.className = state.selectMode ? "show" : "";
+    bulkCount.textContent = ids.length + " selected";
+    if (!state.selectMode) bulkPlaylistPicker.innerHTML = "";
+  }
+
+  function toggleSelectMode() {
+    state.selectMode = !state.selectMode;
+    selectToggleBtn.className = state.selectMode ? "active" : "";
+    selectToggleBtn.textContent = state.selectMode ? "Done selecting" : "Select";
+    if (!state.selectMode) {
+      state.selected = {};
+    }
+    updateBulkBar();
+    renderGrid();
+  }
+
+  function toggleItemSelected(itemId) {
+    if (state.selected[itemId]) {
+      delete state.selected[itemId];
+    } else {
+      state.selected[itemId] = true;
+    }
+    updateBulkBar();
+    renderGrid();
+  }
+
+  selectToggleBtn.addEventListener("click", toggleSelectMode);
+  bulkClear.addEventListener("click", function () {
+    state.selected = {};
+    updateBulkBar();
+    renderGrid();
+  });
+  bulkSelectAll.addEventListener("click", function () {
+    state.items.forEach(function (item) { state.selected[item.id] = true; });
+    updateBulkBar();
+    renderGrid();
+  });
+
+  function renderGrid() {
+    grid.innerHTML = "";
+    state.items.forEach(function (item) {
+      var tile = document.createElement("div");
+      var selected = !!state.selected[item.id];
+      tile.className = "tile" + (selected ? " selected" : "");
+
+      var img = document.createElement("img");
+      img.src = "/media/" + item.id + "/thumb";
+      img.alt = item.filename;
+      img.loading = "lazy";
+      tile.appendChild(img);
+
+      if (state.selectMode) {
+        var mark = document.createElement("div");
+        mark.className = "select-mark";
+        mark.textContent = selected ? "\\u2713" : "";
+        tile.appendChild(mark);
+        tile.addEventListener("click", function () {
+          toggleItemSelected(item.id);
+        });
+      } else {
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "delete-btn";
+        del.title = "Delete " + item.filename;
+        del.textContent = "\\u00d7";
+        del.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (!window.confirm("Delete " + item.filename + "? "
+            + "This is recoverable (goes to trash).")) return;
+          fetch("/media/" + item.id, { method: "DELETE" })
+            .then(function (r) {
+              if (r.ok) {
+                showToast("Deleted " + item.filename + ".", "ok");
+                loadStats();
+                loadGrid();
+              } else {
+                showToast("Could not delete " + item.filename + ".", "err");
+              }
+            })
+            .catch(function () {
+              showToast("Could not delete " + item.filename + ".", "err");
+            });
+        });
+        tile.appendChild(del);
+        tile.addEventListener("click", function () { openModal(item.id); });
+      }
+
+      grid.appendChild(tile);
+    });
+  }
 
   function loadGrid() {
     var params = "page=" + state.page + "&page_size=" + PAGE_SIZE +
@@ -652,42 +1331,9 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       .then(function (data) {
         state.hasNext = !!data.has_next;
         state.total = data.total || 0;
+        state.items = data.items || [];
 
-        grid.innerHTML = "";
-        (data.items || []).forEach(function (item) {
-          var tile = document.createElement("div");
-          tile.className = "tile";
-
-          var img = document.createElement("img");
-          img.src = "/media/" + item.id + "/thumb";
-          img.alt = item.filename;
-          img.loading = "lazy";
-          tile.appendChild(img);
-
-          var del = document.createElement("button");
-          del.type = "button";
-          del.className = "delete-btn";
-          del.title = "Delete " + item.filename;
-          del.textContent = "\\u00d7";
-          del.addEventListener("click", function () {
-            if (!window.confirm("Delete " + item.filename + "?")) return;
-            fetch("/media/" + item.id, { method: "DELETE" })
-              .then(function (r) {
-                if (r.ok) {
-                  loadStats();
-                  loadGrid();
-                } else {
-                  window.alert("Could not delete " + item.filename);
-                }
-              })
-              .catch(function () {
-                window.alert("Could not delete " + item.filename);
-              });
-          });
-          tile.appendChild(del);
-
-          grid.appendChild(tile);
-        });
+        renderGrid();
 
         if (state.total === 0) {
           resultsSummary.textContent = state.q
@@ -699,7 +1345,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
           resultsSummary.textContent =
             "Showing " + start + "-" + end + " of " + state.total;
         }
-        pageInfo.textContent = "Page " + state.page;
+        pageInfo.textContent = "Page " + state.page + " of " + totalPages();
         pagePrev.disabled = state.page <= 1;
         pageNext.disabled = !state.hasNext;
       })
@@ -737,12 +1383,446 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     }
   });
 
+  /* ---- Bulk actions ---- */
+  function selectedIds() {
+    return Object.keys(state.selected);
+  }
+
+  bulkSoftDelete.addEventListener("click", function () {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+    if (!window.confirm("Delete " + ids.length + " item(s)? "
+      + "This is recoverable (goes to trash).")) return;
+    fetch("/media/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids, permanent: false }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        showToast(
+          "Deleted " + (data.deleted || []).length + " item(s).", "ok"
+        );
+        state.selected = {};
+        updateBulkBar();
+        loadStats();
+        loadGrid();
+      })
+      .catch(function () { showToast("Bulk delete failed.", "err"); });
+  });
+
+  bulkHardDelete.addEventListener("click", function () {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+    if (!window.confirm("Permanently delete " + ids.length + " item(s)? "
+      + "This CANNOT be undone.")) return;
+    if (!window.confirm("Are you sure? This will erase " + ids.length
+      + " file(s) forever.")) return;
+    fetch("/media/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids, permanent: true }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        showToast(
+          "Permanently deleted " + (data.deleted || []).length
+          + " item(s).", "ok"
+        );
+        state.selected = {};
+        updateBulkBar();
+        loadStats();
+        loadGrid();
+      })
+      .catch(function () { showToast("Bulk delete failed.", "err"); });
+  });
+
+  bulkAddPlaylist.addEventListener("click", function () {
+    var ids = selectedIds();
+    if (ids.length === 0) return;
+    renderPlaylistPicker(bulkPlaylistPicker, function (name) {
+      fetch("/playlists/" + encodeURIComponent(name) + "/items/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: ids }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          showToast(
+            "Added " + ids.length + " item(s) to \\"" + name + "\\".", "ok"
+          );
+          bulkPlaylistPicker.innerHTML = "";
+          loadPlaylists();
+        })
+        .catch(function () { showToast("Could not add to slideshow.", "err"); });
+    });
+  });
+
+  /* ---- Reusable playlist picker (existing list + create-new) ---- */
+  function renderPlaylistPicker(container, onPick) {
+    container.innerHTML = "";
+    var wrap = document.createElement("div");
+    wrap.id = "playlist-picker show";
+    wrap.className = "show";
+    wrap.style.marginTop = "0.5rem";
+    wrap.style.background = "var(--bg-alt)";
+    wrap.style.border = "1px solid var(--border)";
+    wrap.style.borderRadius = "6px";
+    wrap.style.padding = "0.7rem";
+
+    var existing = document.createElement("div");
+    existing.className = "pp-existing";
+    fetch("/playlists")
+      .then(function (r) { return r.json(); })
+      .then(function (playlists) {
+        if (playlists.length === 0) {
+          var none = document.createElement("div");
+          none.style.color = "var(--muted)";
+          none.style.fontSize = "0.8rem";
+          none.textContent = "No slideshows yet -- create one below.";
+          existing.appendChild(none);
+        }
+        playlists.forEach(function (pl) {
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "pp-item";
+          btn.textContent = pl.name + " (" + pl.count + ")";
+          btn.addEventListener("click", function () { onPick(pl.name); });
+          existing.appendChild(btn);
+        });
+      })
+      .catch(function () {});
+    wrap.appendChild(existing);
+
+    var newRow = document.createElement("div");
+    newRow.className = "pp-new-row";
+    var nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.placeholder = "New slideshow name";
+    var createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "pp-create";
+    createBtn.textContent = "Create + add";
+    createBtn.addEventListener("click", function () {
+      var name = nameInput.value.trim();
+      if (!name) return;
+      fetch("/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name }),
+      })
+        .then(function (r) {
+          if (r.ok || r.status === 409) {
+            onPick(name);
+          } else {
+            showToast("Could not create slideshow.", "err");
+          }
+        })
+        .catch(function () { showToast("Could not create slideshow.", "err"); });
+    });
+    newRow.appendChild(nameInput);
+    newRow.appendChild(createBtn);
+    wrap.appendChild(newRow);
+
+    container.appendChild(wrap);
+  }
+
+  /* ---- Programmed slideshows section ---- */
+  var playlistsList = document.getElementById("playlists-list");
+  var playlistsEmpty = document.getElementById("playlists-empty");
+  var newPlaylistName = document.getElementById("new-playlist-name");
+  var newPlaylistBtn = document.getElementById("new-playlist-btn");
+
+  function loadPlaylists() {
+    fetch("/playlists")
+      .then(function (r) { return r.json(); })
+      .then(function (playlists) {
+        playlistsList.innerHTML = "";
+        playlistsEmpty.style.display = playlists.length === 0 ? "block" : "none";
+        playlists.forEach(function (pl) {
+          var row = document.createElement("div");
+          row.className = "playlist-row";
+
+          var name = document.createElement("span");
+          name.className = "pl-name";
+          name.textContent = pl.name;
+          row.appendChild(name);
+
+          var count = document.createElement("span");
+          count.className = "pl-count";
+          count.textContent = pl.count + " item(s)";
+          row.appendChild(count);
+
+          var actions = document.createElement("div");
+          actions.className = "pl-actions";
+
+          var playBtn = document.createElement("button");
+          playBtn.type = "button";
+          playBtn.className = "pl-play";
+          playBtn.textContent = "Play on display";
+          playBtn.addEventListener("click", function () {
+            runControl(
+              playBtn,
+              "/control/playlist/" + encodeURIComponent(pl.name),
+              "POST",
+              undefined,
+              "...",
+              "Playing slideshow \\"" + pl.name + "\\" on the display."
+            );
+          });
+          actions.appendChild(playBtn);
+
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "pl-delete";
+          delBtn.textContent = "Delete";
+          delBtn.addEventListener("click", function () {
+            if (!window.confirm("Delete slideshow \\"" + pl.name + "\\"? "
+              + "The photos themselves are not deleted.")) return;
+            fetch("/playlists/" + encodeURIComponent(pl.name), {
+              method: "DELETE",
+            })
+              .then(function (r) {
+                if (r.ok) {
+                  showToast("Deleted slideshow \\"" + pl.name + "\\".", "ok");
+                  loadPlaylists();
+                } else {
+                  showToast("Could not delete slideshow.", "err");
+                }
+              })
+              .catch(function () {
+                showToast("Could not delete slideshow.", "err");
+              });
+          });
+          actions.appendChild(delBtn);
+
+          row.appendChild(actions);
+          playlistsList.appendChild(row);
+        });
+      })
+      .catch(function () {
+        playlistsEmpty.style.display = "block";
+        playlistsEmpty.textContent = "Could not load slideshows.";
+      });
+  }
+
+  newPlaylistBtn.addEventListener("click", function () {
+    var name = newPlaylistName.value.trim();
+    if (!name) return;
+    fetch("/playlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name }),
+    })
+      .then(function (r) {
+        if (r.ok) {
+          showToast("Created slideshow \\"" + name + "\\".", "ok");
+          newPlaylistName.value = "";
+          loadPlaylists();
+        } else if (r.status === 409) {
+          showToast("A slideshow with that name already exists.", "err");
+        } else {
+          showToast("Could not create slideshow.", "err");
+        }
+      })
+      .catch(function () { showToast("Could not create slideshow.", "err"); });
+  });
+
+  /* ---- Modal / lightbox ---- */
+  var modalBackdrop = document.getElementById("modal-backdrop");
+  var modalCard = document.getElementById("modal-card");
+  var modalClose = document.getElementById("modal-close");
+  var modalImg = document.getElementById("modal-img");
+  var modalTitle = document.getElementById("modal-title");
+  var modalDetails = document.getElementById("modal-details");
+  var actShow = document.getElementById("act-show");
+  var actAddPlaylist = document.getElementById("act-add-playlist");
+  var actSoftDelete = document.getElementById("act-soft-delete");
+  var actHardDelete = document.getElementById("act-hard-delete");
+  var modalPlaylistPicker = document.getElementById("playlist-picker");
+
+  var modalItem = null;
+
+  function fmtDate(iso) {
+    if (!iso) return null;
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString(undefined, {
+        year: "numeric", month: "long", day: "numeric",
+        hour: "numeric", minute: "2-digit",
+      });
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  function addDetail(dt, dd) {
+    var t = document.createElement("dt");
+    t.textContent = dt;
+    var d = document.createElement("dd");
+    d.textContent = dd;
+    modalDetails.appendChild(t);
+    modalDetails.appendChild(d);
+  }
+
+  function addDetailHtml(dt, html) {
+    var t = document.createElement("dt");
+    t.textContent = dt;
+    var d = document.createElement("dd");
+    d.innerHTML = html;
+    modalDetails.appendChild(t);
+    modalDetails.appendChild(d);
+  }
+
+  function openModal(itemId) {
+    modalPlaylistPicker.className = "";
+    modalPlaylistPicker.innerHTML = "";
+    modalImg.src = "";
+    modalTitle.textContent = "Loading...";
+    modalDetails.innerHTML = "";
+    modalBackdrop.className = "show";
+
+    fetch("/media/" + itemId + "/info")
+      .then(function (r) { return r.json(); })
+      .then(function (item) {
+        modalItem = item;
+        modalTitle.textContent = item.filename;
+        modalImg.src = item.kind === "image"
+          ? "/media/" + item.id
+          : "/media/" + item.id + "/thumb?size=800";
+        modalImg.alt = item.filename;
+
+        modalDetails.innerHTML = "";
+        addDetail("Kind", item.kind);
+        var meta = item.meta || {};
+        addDetail(
+          "Date taken",
+          meta.taken_at ? fmtDate(meta.taken_at) : "Unknown"
+        );
+        addDetail("Camera", meta.camera_model || "Unknown");
+        if (meta.width && meta.height) {
+          addDetail("Dimensions", meta.width + " x " + meta.height);
+        }
+        if (item.kind === "video" && meta.duration_s) {
+          addDetail("Duration", Math.round(meta.duration_s) + " s");
+        }
+        if (meta.lat != null && meta.lon != null) {
+          var url = "https://www.openstreetmap.org/?mlat=" + meta.lat
+            + "&mlon=" + meta.lon;
+          addDetailHtml(
+            "Location",
+            meta.lat.toFixed(5) + ", " + meta.lon.toFixed(5)
+            + ' (<a href="' + url + '" target="_blank" '
+            + 'rel="noopener">view on map</a>)'
+          );
+        } else {
+          addDetail("Location", "Unknown");
+        }
+        addDetail("Server path", item.server_path);
+        addDetail("SHA-256", meta.sha256 || "Unknown");
+        addDetail("Ingested", fmtDate(meta.ingest_at) || "Unknown");
+      })
+      .catch(function () {
+        modalTitle.textContent = "Could not load details.";
+      });
+  }
+
+  function closeModal() {
+    modalBackdrop.className = "";
+    modalItem = null;
+  }
+
+  modalClose.addEventListener("click", closeModal);
+  modalBackdrop.addEventListener("click", function (e) {
+    if (e.target === modalBackdrop) closeModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && modalBackdrop.className.indexOf("show") !== -1) {
+      closeModal();
+    }
+  });
+
+  actShow.addEventListener("click", function () {
+    if (!modalItem) return;
+    runControl(
+      actShow,
+      "/control/show/" + modalItem.id,
+      "POST",
+      undefined,
+      "...",
+      "Now showing \\"" + modalItem.filename + "\\" on the display."
+    );
+  });
+
+  actAddPlaylist.addEventListener("click", function () {
+    if (!modalItem) return;
+    var itemId = modalItem.id;
+    var filename = modalItem.filename;
+    renderPlaylistPicker(modalPlaylistPicker, function (name) {
+      fetch("/playlists/" + encodeURIComponent(name) + "/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: itemId }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          showToast(
+            "Added \\"" + filename + "\\" to \\"" + name + "\\".", "ok"
+          );
+          modalPlaylistPicker.innerHTML = "";
+          loadPlaylists();
+        })
+        .catch(function () { showToast("Could not add to slideshow.", "err"); });
+    });
+  });
+
+  actSoftDelete.addEventListener("click", function () {
+    if (!modalItem) return;
+    if (!window.confirm("Delete \\"" + modalItem.filename + "\\"? "
+      + "This is recoverable (goes to trash).")) return;
+    fetch("/media/" + modalItem.id, { method: "DELETE" })
+      .then(function (r) {
+        if (r.ok) {
+          showToast("Deleted \\"" + modalItem.filename + "\\".", "ok");
+          closeModal();
+          loadStats();
+          loadGrid();
+        } else {
+          showToast("Could not delete item.", "err");
+        }
+      })
+      .catch(function () { showToast("Could not delete item.", "err"); });
+  });
+
+  actHardDelete.addEventListener("click", function () {
+    if (!modalItem) return;
+    if (!window.confirm("Permanently delete \\"" + modalItem.filename
+      + "\\"? This CANNOT be undone.")) return;
+    if (!window.confirm("Are you sure? The file will be erased forever."))
+      return;
+    fetch("/media/" + modalItem.id + "?permanent=true", { method: "DELETE" })
+      .then(function (r) {
+        if (r.ok) {
+          showToast(
+            "Permanently deleted \\"" + modalItem.filename + "\\".", "ok"
+          );
+          closeModal();
+          loadStats();
+          loadGrid();
+        } else {
+          showToast("Could not delete item.", "err");
+        }
+      })
+      .catch(function () { showToast("Could not delete item.", "err"); });
+  });
+
   loadStats();
   refreshStatus();
   loadGrid();
+  loadPlaylists();
   setInterval(refreshStatus, 5000);
 })();
 </script>
 </body>
-</html>
-"""
+</html>"""

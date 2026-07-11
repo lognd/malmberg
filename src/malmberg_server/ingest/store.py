@@ -116,6 +116,26 @@ class MediaStore:
             _log.info("Hidden (kept) %s (%s)", item_id, item.filename)
             return Ok({"status": "hidden", "id": item_id})
 
+    def delete_permanent(
+        self,
+        item_id: str,
+        media_root: Path,
+    ) -> Result[dict[str, str], IngestError]:
+        """Permanently remove *item_id*: drop the index entry and unlink the file.
+
+        Unlike ``delete``, this never moves the file to trash and is not
+        recoverable. Missing files on disk are ignored (index entry is still
+        removed).
+        """
+        item = self._items.get(item_id)
+        if item is None:
+            return Err(IngestError.NotFound)
+        src = media_root / item.server_path
+        src.unlink(missing_ok=True)
+        del self._items[item_id]
+        _log.info("Permanently deleted %s (%s)", item_id, item.filename)
+        return Ok({"status": "deleted", "id": item_id})
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
