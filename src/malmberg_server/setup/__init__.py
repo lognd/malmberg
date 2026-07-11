@@ -118,6 +118,13 @@ _ARC_CONF = Path("/etc/modprobe.d/zfs.conf")
 
 _FS_SUBDIRS = ("media", "uploads", "cloud", ".trash", "logs")
 
+# ufw rules to open when a firewall is present: (port, protocol, comment).
+# 8444/tcp is the server API; 9456/udp is display discovery.
+_FIREWALL_RULES = (
+    ("8444", "tcp", "malmberg server API"),
+    ("9456", "udp", "malmberg UDP discovery"),
+)
+
 # Unattended GitHub updates live in malmberg_core.provision (shared with display).
 
 # EFI mirror (keep every disk in the pool independently bootable).
@@ -256,6 +263,9 @@ def run(args: argparse.Namespace) -> None:
         steps.append(("Service", "malmberg-server enabled and started"))
     else:
         steps.append(("Service", "skipped (--no-enable)"))
+
+    # 8b. Firewall: open API + discovery ports so displays can reach the server.
+    steps.append(("Firewall", _step_firewall(dry, warnings)))
 
     # 9. Cron jobs (trash purge + ZFS backup)
     _step_cron(fs_root, dry, warnings)
@@ -480,6 +490,25 @@ def _step_enable(dry: bool, warnings: list[str]) -> None:
             f"systemctl enable failed: {result.stderr.strip()}. "
             "Start manually: sudo systemctl start malmberg-server"
         )
+
+
+def _step_firewall(dry: bool, warnings: list[str]) -> str:
+    """Open the API and discovery ports if ufw is present (idempotent)."""
+    if not _has_cmd("ufw"):
+        return "skipped (ufw not installed)"
+    opened: list[str] = []
+    for port, proto, comment in _FIREWALL_RULES:
+        _log.info("Allowing %s/%s through ufw.", port, proto)
+        if not dry:
+            subprocess.run(
+                ["ufw", "allow", f"{port}/{proto}", "comment", comment],
+                check=False,
+                capture_output=True,
+            )
+        opened.append(f"{port}/{proto}")
+    if not dry:
+        subprocess.run(["ufw", "reload"], check=False, capture_output=True)
+    return "opened " + ", ".join(opened)
 
 
 def _step_cron(fs_root: Path, dry: bool, warnings: list[str]) -> None:
