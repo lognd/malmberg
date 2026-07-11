@@ -283,7 +283,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     display: flex;
     flex-wrap: wrap;
     gap: 0.9rem;
+    /* Cap the height so a big library of faces scrolls inside the section
+       instead of pushing the photo library far down the page. */
+    max-height: 30rem;
+    overflow-y: auto;
+    padding: 0.2rem;
+    align-content: flex-start;
   }
+  .people-grid.maximized { max-height: none; overflow-y: visible; }
   .person-card {
     background: var(--bg-alt);
     border: 1px solid var(--border);
@@ -839,16 +846,29 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     min-height: 44px;
     padding: 0.4rem 1rem;
   }
+  #frame-quick-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+  }
+  #frame-quick-row #year-filter-buttons { margin: 0; }
   #loop-toggle-row {
     display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.4rem;
     margin-top: 0.7rem;
-    font-size: 0.78rem;
+    font-size: 0.85rem;
     color: var(--muted);
+  }
+  #loop-toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     cursor: pointer;
   }
-  #loop-toggle-row input { margin-top: 0.15rem; }
+  #loop-toggle-row input { width: 20px; height: 20px; }
   /* Page header + help button */
   #page-head-row {
     display: flex;
@@ -858,91 +878,48 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     flex-wrap: wrap;
   }
   #page-head-row h1 { margin: 0.25rem 0; }
-  #help-btn {
-    min-height: 44px;
-    padding: 0.4rem 1rem;
-    font-size: 0.85rem;
-    font-weight: 700;
-    background: var(--bg-alt);
+  /* Inline, click-to-open help tips: a small "?" next to a control or
+     description that reveals a plain-language explanation in context.
+     Replaces the old auto-popup walkthrough. */
+  .help { position: relative; display: inline-block; vertical-align: middle; }
+  .help-tip {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0;
+    border-radius: 50%;
     border: 1px solid var(--accent);
-    border-radius: 6px;
+    background: var(--bg-alt);
     color: var(--accent);
+    font-weight: 700;
+    font-size: 0.9rem;
+    line-height: 1;
     cursor: pointer;
   }
-  #help-btn:hover, #help-btn:focus-visible {
+  .help-tip:hover, .help-tip:focus-visible {
     background: var(--accent); color: #282828; outline: none;
   }
-  /* Onboarding walkthrough: large, plain-language, dependency-free. */
-  #walkthrough-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.8);
+  .help-bubble {
     display: none;
-    z-index: 80;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
-  }
-  #walkthrough-backdrop.show { display: flex; }
-  #walkthrough-card {
-    background: var(--bg);
-    border: 2px solid var(--accent);
-    border-radius: 12px;
-    padding: 1.6rem 1.4rem;
-    max-width: 480px;
-    width: 100%;
-    text-align: center;
-  }
-  #walkthrough-step-text {
-    font-size: 1.15rem;
+    position: absolute;
+    z-index: 90;
+    left: 0;
+    top: calc(100% + 6px);
+    width: max-content;
+    max-width: min(300px, 80vw);
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.92rem;
+    font-weight: 400;
     line-height: 1.5;
     color: var(--text);
-    min-height: 6rem;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+    white-space: normal;
+    text-align: left;
   }
-  #walkthrough-dots {
-    display: flex;
-    justify-content: center;
-    gap: 0.4rem;
-    margin: 1rem 0;
-  }
-  #walkthrough-dots span {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--border);
-    display: inline-block;
-  }
-  #walkthrough-dots span.on { background: var(--accent); }
-  #walkthrough-actions {
-    display: flex;
-    gap: 0.6rem;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-  #walkthrough-actions button {
-    min-height: 48px;
-    min-width: 96px;
-    font-size: 0.95rem;
-    font-weight: 700;
-    padding: 0.5rem 1.2rem;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  #walkthrough-skip {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    color: var(--muted);
-  }
-  #walkthrough-back {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    color: var(--text);
-  }
-  #walkthrough-next {
-    background: var(--accent);
-    border: 1px solid var(--accent);
-    color: #282828;
-  }
+  .help.open .help-bubble { display: block; }
   /* Toasts */
   #toast-stack {
     position: fixed;
@@ -1487,7 +1464,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 <main>
   <div id="page-head-row">
     <h1>Malmberg Dashboard</h1>
-    <button id="help-btn" type="button">Help / show me around</button>
+    <span class="help">
+      <button class="help-tip" type="button"
+              aria-label="What is this page?">?</button>
+      <span class="help-bubble">This page has two parts. The top section (orange
+      border) controls what shows right now on your TV / photo frame. The bottom
+      section (green border) is your photo library. Tap any "?" for help on that
+      part.</span>
+    </span>
   </div>
 
   <div class="domain domain-display">
@@ -1521,29 +1505,46 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <select id="display-select" disabled></select>
       </div>
       <div id="frame-filter-group">
-        <div class="yf-label">Quick pick a year to show on the frame</div>
-        <div id="year-filter-buttons"></div>
-        <button id="month-filter-toggle" type="button" class="collapse-btn">
-          Show months
-        </button>
-        <div id="month-filter-buttons" class="collapsed"></div>
-        <div class="yf-label" id="frame-search-label">
-          Or type a year, month, place, or person's name to show on the frame
+        <div class="yf-label">
+          Show on the frame
+          <span class="help">
+            <button class="help-tip" type="button"
+                    aria-label="How to show photos on the frame">?</button>
+            <span class="help-bubble">Tap a year to show that year on the TV.
+            "Months" splits a year into months. Or type a year (2006), a month
+            (2006-07), a place (Tampa), or a person's name (Grandma) in the box
+            and press "Show on frame".</span>
+          </span>
         </div>
+        <div id="frame-quick-row">
+          <div id="year-filter-buttons"></div>
+          <button id="month-filter-toggle" type="button" class="collapse-btn">
+            Months
+          </button>
+        </div>
+        <div id="month-filter-buttons" class="collapsed"></div>
         <div class="search-row" id="frame-search-row">
           <input id="frame-search-input" type="text" autocomplete="off"
-            list="frame-search-suggestions" aria-labelledby="frame-search-label"
-            placeholder="e.g. 2006, 2006-07, Tampa, or Grandma">
+            list="frame-search-suggestions"
+            aria-label="Type a year, month, place, or name to show on the frame"
+            placeholder="or type a year, place, or name...">
           <datalist id="frame-search-suggestions"></datalist>
           <button id="frame-search-play-btn" type="button">Show on frame</button>
         </div>
       </div>
-      <label id="loop-toggle-row">
-        <input type="checkbox" id="loop-toggle">
-        <span>Keep the chosen year or slideshow looping until I stop it.
-        Off (normal) plays it once, then all your photos come back on their
-        own. To stop a loop, press "Play whole library".</span>
-      </label>
+      <div id="loop-toggle-row">
+        <label id="loop-toggle-label">
+          <input type="checkbox" id="loop-toggle">
+          <span>Keep it looping until I stop it</span>
+        </label>
+        <span class="help">
+          <button class="help-tip" type="button"
+                  aria-label="What does looping do?">?</button>
+          <span class="help-bubble">Off (normal): the chosen photos play once,
+          then all your photos come back on their own. On: they keep repeating
+          until you press "Play whole library".</span>
+        </span>
+      </div>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
       on the server to enable.</div>
       <div id="restart-row">
@@ -1574,28 +1575,37 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     </section>
 
     <section>
-      <h2>Search by place or person</h2>
+      <h2>
+        Search by time, place, or person
+        <span class="help">
+          <button class="help-tip" type="button"
+                  aria-label="How search works">?</button>
+          <span class="help-bubble">Type a year (2006), a month (2006-07), a
+          place (Tampa), or a person's name. The photo grid below updates as you
+          type. To put these on the TV instead, use "Show on the frame" up top.
+          </span>
+        </span>
+      </h2>
       <div class="search-row" id="place-search-row">
         <input id="place-input" type="text" autocomplete="off"
           list="place-suggestions"
-          placeholder="Filter photos by place, e.g. Tampa">
+          placeholder="By time or place, e.g. 2006, 2006-07, or Tampa">
         <datalist id="place-suggestions"></datalist>
       </div>
       <div class="search-row" id="person-search-row">
         <input id="person-input" type="text" autocomplete="off"
           list="person-suggestions"
-          placeholder="Filter photos by a person's name">
+          placeholder="By a person's name">
         <datalist id="person-suggestions"></datalist>
-      </div>
-      <div class="domain-sub" id="place-hint">
-        Typing here filters the browse grid below. To show a place or person
-        on the TV, use "Show a person, place, or year on the frame" up top.
       </div>
     </section>
 
     <section id="people-section">
       <div class="people-head">
         <h2>People</h2>
+        <button id="people-maximize" type="button" class="collapse-btn">
+          Maximize
+        </button>
         <button id="people-toggle" type="button" class="collapse-btn">Hide</button>
       </div>
       <div id="people-body">
@@ -1690,18 +1700,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   <footer>Malmberg self-hosted photo frame</footer>
 </main>
-
-<div id="walkthrough-backdrop">
-  <div id="walkthrough-card">
-    <div id="walkthrough-step-text"></div>
-    <div id="walkthrough-dots"></div>
-    <div id="walkthrough-actions">
-      <button id="walkthrough-skip" type="button">Skip</button>
-      <button id="walkthrough-back" type="button">Back</button>
-      <button id="walkthrough-next" type="button">Next</button>
-    </div>
-  </div>
-</div>
 
 <div id="toast-stack"></div>
 
@@ -2669,6 +2667,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     var collapsed = peopleBody.classList.toggle("collapsed");
     peopleToggle.textContent = collapsed ? "Show" : "Hide";
   });
+  var peopleMaximize = document.getElementById("people-maximize");
+  peopleMaximize.addEventListener("click", function () {
+    var max = peopleGrid.classList.toggle("maximized");
+    peopleMaximize.textContent = max ? "Scroll box" : "Maximize";
+  });
   peopleShowSmall.addEventListener("change", loadPeople);
 
   function postName(personId, newName) {
@@ -3580,79 +3583,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (actAddPlaylistBtn) actAddPlaylistBtn.style.display = "none";
   }
 
-  /* ---- Onboarding walkthrough: a few large, plain-language cards shown
-     on first visit, with a "Got it" (Skip/Next through to the end) flow
-     and an always-available "Help / show me around" button to replay it.
-     Dependency-free; "seen" is remembered in localStorage. ---- */
-  var WALKTHROUGH_SEEN_KEY = "malmberg_walkthrough_seen";
-  var WALKTHROUGH_STEPS = [
-    "Welcome! This page has two parts. The top part with the orange " +
-      "border controls what is showing right now on your TV or photo " +
-      "frame.",
-    "The bottom part with the green border is your photo library -- " +
-      "where all your photos and videos are kept safe.",
-    "Tap a year button, or type a year, month, place, or a person's " +
-      "name in the box, to show those photos on the TV.",
-    "Tap a photo or a name anywhere in the library to see it, or to " +
-      "show it on the TV.",
-    "In the People section, tap a person's picture to see their photos " +
-      "and check the faces. Use the big 'Name this person' button to " +
-      "give them a name.",
-    "You can always come back to this tour later by pressing " +
-      "'Help / show me around' at the top of the page.",
-  ];
-  var walkthroughBackdrop = document.getElementById("walkthrough-backdrop");
-  var walkthroughStepText = document.getElementById("walkthrough-step-text");
-  var walkthroughDots = document.getElementById("walkthrough-dots");
-  var walkthroughSkip = document.getElementById("walkthrough-skip");
-  var walkthroughBack = document.getElementById("walkthrough-back");
-  var walkthroughNext = document.getElementById("walkthrough-next");
-  var helpBtn = document.getElementById("help-btn");
-  var walkthroughStep = 0;
-
-  function renderWalkthroughStep() {
-    walkthroughStepText.textContent = WALKTHROUGH_STEPS[walkthroughStep];
-    walkthroughDots.innerHTML = "";
-    WALKTHROUGH_STEPS.forEach(function (_step, i) {
-      var dot = document.createElement("span");
-      if (i === walkthroughStep) dot.className = "on";
-      walkthroughDots.appendChild(dot);
-    });
-    walkthroughBack.style.visibility = walkthroughStep === 0 ? "hidden" : "visible";
-    var isLast = walkthroughStep === WALKTHROUGH_STEPS.length - 1;
-    walkthroughNext.textContent = isLast ? "Got it" : "Next";
-  }
-
-  function openWalkthrough() {
-    walkthroughStep = 0;
-    renderWalkthroughStep();
-    walkthroughBackdrop.classList.add("show");
-  }
-  function closeWalkthrough() {
-    walkthroughBackdrop.classList.remove("show");
-    try {
-      window.localStorage.setItem(WALKTHROUGH_SEEN_KEY, "1");
-    } catch (e) { /* ignore */ }
-  }
-  walkthroughSkip.addEventListener("click", closeWalkthrough);
-  walkthroughBack.addEventListener("click", function () {
-    if (walkthroughStep > 0) { walkthroughStep -= 1; renderWalkthroughStep(); }
-  });
-  walkthroughNext.addEventListener("click", function () {
-    if (walkthroughStep < WALKTHROUGH_STEPS.length - 1) {
-      walkthroughStep += 1;
-      renderWalkthroughStep();
-    } else {
-      closeWalkthrough();
+  /* ---- Click-to-open help tips: tapping a "?" toggles the plain-language
+     bubble next to that control; tapping anywhere else closes it. Replaces
+     the old auto-popup walkthrough (dependency-free, no localStorage). ---- */
+  document.addEventListener("click", function (e) {
+    var tip = e.target.closest ? e.target.closest(".help-tip") : null;
+    var open = document.querySelectorAll(".help.open");
+    var i;
+    if (tip) {
+      e.preventDefault();
+      var help = tip.parentNode;
+      var wasOpen = help.classList.contains("open");
+      for (i = 0; i < open.length; i++) open[i].classList.remove("open");
+      if (!wasOpen) help.classList.add("open");
+      return;
     }
+    if (e.target.closest && e.target.closest(".help-bubble")) return;
+    for (i = 0; i < open.length; i++) open[i].classList.remove("open");
   });
-  helpBtn.addEventListener("click", openWalkthrough);
-
-  var walkthroughAlreadySeen = false;
-  try {
-    walkthroughAlreadySeen = !!window.localStorage.getItem(WALKTHROUGH_SEEN_KEY);
-  } catch (e) { /* ignore */ }
-  if (!walkthroughAlreadySeen) openWalkthrough();
 
   loadStats();
   refreshStatus();
