@@ -993,11 +993,17 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     padding: 0 1rem;
     min-height: 44px;
     font-size: 0.85rem;
+    font-weight: 700;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--bg-alt);
     color: var(--text);
     cursor: pointer;
+  }
+  #select-toggle-btn {
+    color: #282828;
+    background: var(--accent);
+    border-color: var(--accent);
   }
   #select-toggle-btn.active {
     color: #282828;
@@ -1169,32 +1175,55 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   /* Bulk action bar */
   #bulk-bar {
     display: none;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.6rem;
+    flex-direction: column;
+    gap: 0.7rem;
     margin-bottom: 0.85rem;
-    padding: 0.7rem 0.85rem;
-    border-radius: 6px;
-    border: 1px solid var(--aqua);
+    padding: 0.85rem 0.9rem;
+    border-radius: 8px;
+    border: 2px solid var(--aqua);
     background: var(--bg-alt);
   }
   #bulk-bar.show { display: flex; }
   #bulk-count {
-    font-size: 0.85rem;
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--aqua);
-    margin-right: auto;
+  }
+  #bulk-bar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
   }
   #bulk-bar button {
-    min-height: 40px;
-    padding: 0 0.8rem;
-    font-size: 0.8rem;
+    min-height: 44px;
+    padding: 0 1rem;
+    font-size: 0.82rem;
     font-weight: 700;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--panel);
     color: var(--text);
     cursor: pointer;
+  }
+  #bulk-add-playlist {
+    border-color: var(--aqua);
+    color: var(--aqua);
+  }
+  #bulk-danger-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+    padding-left: 0.75rem;
+    border-left: 1px dashed var(--border);
+  }
+  #bulk-soft-delete {
+    color: var(--err);
+    border-color: var(--err);
+    background: transparent;
+    opacity: 0.85;
   }
   #bulk-hard-delete {
     color: var(--muted);
@@ -1203,10 +1232,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     font-weight: 400;
     font-size: 0.72rem;
     min-height: 32px;
-    padding: 0 0.4rem;
+    padding: 0 0.5rem;
     text-decoration: underline;
     opacity: 0.6;
   }
+  #bulk-hard-delete:hover { opacity: 1; color: var(--err); }
   #bulk-hard-delete:hover { color: var(--err); opacity: 1; }
   #bulk-soft-delete { color: var(--warn); border-color: var(--warn); }
   #bulk-add-playlist { color: var(--aqua); border-color: var(--aqua); }
@@ -1696,16 +1726,20 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <input id="search-input" type="text"
           placeholder="Search by filename, year, or place (e.g. 2006 or Tampa)">
         <button id="refresh-btn" type="button">Refresh</button>
-        <button id="select-toggle-btn" type="button">Select</button>
+        <button id="select-toggle-btn" type="button">Bulk Select</button>
       </div>
       <div id="results-summary"></div>
       <div id="bulk-bar">
         <span id="bulk-count">0 selected</span>
-        <button id="bulk-select-all" type="button">Select all on page</button>
-        <button id="bulk-add-playlist" type="button">Add to slideshow</button>
-        <button id="bulk-soft-delete" type="button">Delete (recoverable)</button>
-        <button id="bulk-hard-delete" type="button">Delete permanently</button>
-        <button id="bulk-clear" type="button">Clear selection</button>
+        <div id="bulk-bar-actions">
+          <button id="bulk-select-all" type="button">Select all on page</button>
+          <button id="bulk-add-playlist" type="button">Add to slideshow</button>
+          <button id="bulk-clear" type="button">Clear selection</button>
+          <div id="bulk-danger-group">
+            <button id="bulk-soft-delete" type="button">Delete (recoverable)</button>
+            <button id="bulk-hard-delete" type="button">Delete permanently</button>
+          </div>
+        </div>
       </div>
       <div id="bulk-playlist-picker"></div>
       <div class="grid" id="grid"></div>
@@ -2556,7 +2590,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   function toggleSelectMode() {
     state.selectMode = !state.selectMode;
     selectToggleBtn.className = state.selectMode ? "active" : "";
-    selectToggleBtn.textContent = state.selectMode ? "Done selecting" : "Select";
+    selectToggleBtn.textContent = state.selectMode ? "Done selecting" : "Bulk Select";
     if (!state.selectMode) {
       state.selected = {};
     }
@@ -2611,14 +2645,92 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         mark.textContent = selected ? "\\u2713" : "";
         tile.appendChild(mark);
         tile.addEventListener("click", function () {
+          if (consumeLongPressSuppression()) return;
           toggleItemSelected(item.id);
         });
       } else {
-        tile.addEventListener("click", function () { openModal(item.id); });
+        tile.addEventListener("click", function () {
+          if (consumeLongPressSuppression()) return;
+          openModal(item.id);
+        });
       }
 
+      attachLongPress(tile, item);
       grid.appendChild(tile);
     });
+  }
+
+  /* ---- Long-press to enter bulk-select (touch and mouse) ----
+     A long-press re-renders the grid mid-gesture (to show the selection
+     mark), which replaces the tile element before the browser's follow-up
+     "click" fires. That click then lands on the freshly-rendered tile in
+     the same spot, so a single shared flag (not a per-tile closure) is
+     used to swallow exactly that one click, wherever it lands. */
+  var LONG_PRESS_MS = 500;
+  var LONG_PRESS_MOVE_TOLERANCE = 12;
+  var suppressNextTileClick = false;
+  var suppressResetTimer = null;
+
+  function consumeLongPressSuppression() {
+    if (!suppressNextTileClick) return false;
+    suppressNextTileClick = false;
+    if (suppressResetTimer) {
+      window.clearTimeout(suppressResetTimer);
+      suppressResetTimer = null;
+    }
+    return true;
+  }
+
+  function attachLongPress(tile, item) {
+    var pressTimer = null;
+    var startX = 0;
+    var startY = 0;
+
+    function clearPressTimer() {
+      if (pressTimer) {
+        window.clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    }
+
+    tile.addEventListener("pointerdown", function (e) {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      clearPressTimer();
+      pressTimer = window.setTimeout(function () {
+        pressTimer = null;
+        suppressNextTileClick = true;
+        // Safety net: if no click follows (e.g. touch cancel quirks),
+        // do not let the suppression leak into an unrelated later tap.
+        suppressResetTimer = window.setTimeout(function () {
+          suppressNextTileClick = false;
+        }, 600);
+        if (!state.selectMode) {
+          state.selectMode = true;
+          selectToggleBtn.className = "active";
+          selectToggleBtn.textContent = "Done selecting";
+        }
+        if (!state.selected[item.id]) {
+          state.selected[item.id] = true;
+        }
+        updateBulkBar();
+        renderGrid();
+      }, LONG_PRESS_MS);
+    });
+
+    tile.addEventListener("pointermove", function (e) {
+      if (!pressTimer) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_TOLERANCE) {
+        clearPressTimer();
+      }
+    });
+
+    tile.addEventListener("pointerup", clearPressTimer);
+    tile.addEventListener("pointercancel", clearPressTimer);
+    tile.addEventListener("pointerleave", clearPressTimer);
   }
 
   function loadGrid() {
@@ -3222,27 +3334,150 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .catch(function () { showToast("Bulk delete failed.", "err"); });
   });
 
+  /* ---- Remembered slideshow target ----
+     Like "Add to playlist" on a music app: once the user picks a
+     slideshow, later "Add to slideshow" taps go straight there without
+     reopening the picker. Deliberately NOT persisted (plain var, resets
+     on reload) and times out after a few minutes so a stale target never
+     silently receives photos. */
+  var REMEMBER_PLAYLIST_TIMEOUT_MS = 5 * 60 * 1000;
+  var rememberedPlaylistName = null;
+  var rememberedPlaylistAt = 0;
+
+  function rememberPlaylist(name) {
+    rememberedPlaylistName = name;
+    rememberedPlaylistAt = Date.now();
+  }
+
+  function getRememberedPlaylist() {
+    if (!rememberedPlaylistName) return null;
+    if (Date.now() - rememberedPlaylistAt > REMEMBER_PLAYLIST_TIMEOUT_MS) {
+      rememberedPlaylistName = null;
+      return null;
+    }
+    return rememberedPlaylistName;
+  }
+
+  /* Small fixed bottom bar confirming a direct add, with a clearly
+     labeled way to change the remembered target for next time. */
+  var changeBar = null;
+  var changeBarHideTimer = null;
+
+  function hideChangeBar() {
+    if (changeBarHideTimer) {
+      window.clearTimeout(changeBarHideTimer);
+      changeBarHideTimer = null;
+    }
+    if (changeBar && changeBar.parentNode) {
+      changeBar.parentNode.removeChild(changeBar);
+    }
+    changeBar = null;
+  }
+
+  function showChangeBar(message, onChangeSlideshow) {
+    hideChangeBar();
+    changeBar = document.createElement("div");
+    changeBar.setAttribute("role", "status");
+    changeBar.style.position = "fixed";
+    changeBar.style.left = "0";
+    changeBar.style.right = "0";
+    changeBar.style.bottom = "0";
+    changeBar.style.zIndex = "600";
+    changeBar.style.display = "flex";
+    changeBar.style.alignItems = "center";
+    changeBar.style.justifyContent = "center";
+    changeBar.style.flexWrap = "wrap";
+    changeBar.style.gap = "0.7rem";
+    changeBar.style.padding = "0.7rem 1rem";
+    changeBar.style.background = "var(--panel)";
+    changeBar.style.borderTop = "2px solid var(--aqua)";
+    changeBar.style.boxShadow = "0 -2px 12px rgba(0, 0, 0, 0.35)";
+
+    var text = document.createElement("span");
+    text.textContent = message;
+    text.style.color = "var(--text)";
+    text.style.fontSize = "0.9rem";
+    text.style.fontWeight = "700";
+    changeBar.appendChild(text);
+
+    var changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.textContent = "Change slideshow";
+    changeBtn.style.minHeight = "44px";
+    changeBtn.style.padding = "0 1.1rem";
+    changeBtn.style.fontSize = "0.85rem";
+    changeBtn.style.fontWeight = "700";
+    changeBtn.style.borderRadius = "6px";
+    changeBtn.style.border = "1px solid var(--aqua)";
+    changeBtn.style.background = "transparent";
+    changeBtn.style.color = "var(--aqua)";
+    changeBtn.style.cursor = "pointer";
+    changeBtn.addEventListener("click", function () {
+      hideChangeBar();
+      onChangeSlideshow();
+    });
+    changeBar.appendChild(changeBtn);
+
+    var dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.textContent = "Dismiss";
+    dismissBtn.setAttribute("aria-label", "Dismiss");
+    dismissBtn.style.minHeight = "44px";
+    dismissBtn.style.padding = "0 0.9rem";
+    dismissBtn.style.fontSize = "0.85rem";
+    dismissBtn.style.borderRadius = "6px";
+    dismissBtn.style.border = "1px solid var(--border)";
+    dismissBtn.style.background = "transparent";
+    dismissBtn.style.color = "var(--muted)";
+    dismissBtn.style.cursor = "pointer";
+    dismissBtn.addEventListener("click", hideChangeBar);
+    changeBar.appendChild(dismissBtn);
+
+    document.body.appendChild(changeBar);
+    changeBarHideTimer = window.setTimeout(hideChangeBar, 6000);
+  }
+
+  function bulkAddToPlaylist(name, ids) {
+    fetch("/playlists/" + encodeURIComponent(name) + "/items/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        rememberPlaylist(name);
+        bulkPlaylistPicker.innerHTML = "";
+        loadPlaylists();
+        showChangeBar(
+          "Added " + ids.length + " to \\"" + name + "\\".",
+          function () {
+            var freshIds = selectedIds();
+            if (freshIds.length === 0) {
+              showToast("Select one or more photos first.", "err");
+              return;
+            }
+            renderPlaylistPicker(bulkPlaylistPicker, function (pickedName) {
+              bulkAddToPlaylist(pickedName, freshIds);
+            });
+          }
+        );
+      })
+      .catch(function () { showToast("Could not add to slideshow.", "err"); });
+  }
+
   bulkAddPlaylist.addEventListener("click", function () {
     var ids = selectedIds();
     if (ids.length === 0) {
       showToast("Select one or more photos first.", "err");
       return;
     }
+    var remembered = getRememberedPlaylist();
+    if (remembered) {
+      bulkAddToPlaylist(remembered, ids);
+      return;
+    }
     renderPlaylistPicker(bulkPlaylistPicker, function (name) {
-      fetch("/playlists/" + encodeURIComponent(name) + "/items/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: ids }),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function () {
-          showToast(
-            "Added " + ids.length + " item(s) to \\"" + name + "\\".", "ok"
-          );
-          bulkPlaylistPicker.innerHTML = "";
-          loadPlaylists();
-        })
-        .catch(function () { showToast("Could not add to slideshow.", "err"); });
+      bulkAddToPlaylist(name, ids);
     });
   });
 
@@ -3558,25 +3793,40 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     );
   });
 
+  function actAddToPlaylist(name, itemId, filename) {
+    fetch("/playlists/" + encodeURIComponent(name) + "/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        rememberPlaylist(name);
+        modalPlaylistPicker.innerHTML = "";
+        loadPlaylists();
+        showChangeBar(
+          "Added \\"" + filename + "\\" to \\"" + name + "\\".",
+          function () {
+            renderPlaylistPicker(modalPlaylistPicker, function (pickedName) {
+              actAddToPlaylist(pickedName, itemId, filename);
+            });
+          }
+        );
+      })
+      .catch(function () { showToast("Could not add to slideshow.", "err"); });
+  }
+
   actAddPlaylist.addEventListener("click", function () {
     if (!modalItem) return;
     var itemId = modalItem.id;
     var filename = modalItem.filename;
+    var remembered = getRememberedPlaylist();
+    if (remembered) {
+      actAddToPlaylist(remembered, itemId, filename);
+      return;
+    }
     renderPlaylistPicker(modalPlaylistPicker, function (name) {
-      fetch("/playlists/" + encodeURIComponent(name) + "/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: itemId }),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function () {
-          showToast(
-            "Added \\"" + filename + "\\" to \\"" + name + "\\".", "ok"
-          );
-          modalPlaylistPicker.innerHTML = "";
-          loadPlaylists();
-        })
-        .catch(function () { showToast("Could not add to slideshow.", "err"); });
+      actAddToPlaylist(name, itemId, filename);
     });
   });
 
