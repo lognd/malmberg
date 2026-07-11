@@ -27,25 +27,51 @@ _UPDATE_SCRIPT_TEMPLATE = """\
 #!/bin/bash
 # Managed by malmberg setup -- edits are overwritten on the next run.
 # Pulls the latest code from GitHub and redeploys when origin/{branch} advances.
+# If the service fails to come up on the new revision, it rolls back automatically
+# so a bad commit never leaves a headless machine crash-looping.
 set -euo pipefail
 export HOME=/root
 REPO="{repo_dir}"
 BRANCH="{branch}"
+SERVICE="{service}"
+UVLOG=/tmp/malmberg-update-uv.log
 cd "$REPO"
+
+deploy() {{
+    git reset --hard "$1"
+    {uv} sync --frozen {extras}--project "$REPO" >"$UVLOG" 2>&1 \
+        || logger -t malmberg-update "warning: uv sync failed (see $UVLOG)"
+    chown -R {user}:{user} "$REPO"
+    systemctl restart "$SERVICE"
+}}
+
+healthy() {{
+    # Give the service up to ~36s to settle into 'active'.
+    for _ in $(seq 1 12); do
+        sleep 3
+        systemctl is-active --quiet "$SERVICE" && return 0
+    done
+    return 1
+}}
+
 git fetch --quiet origin "$BRANCH"
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
 if [ "$LOCAL" = "$REMOTE" ]; then
     exit 0
 fi
+
 logger -t malmberg-update "new revision $REMOTE (was $LOCAL); updating"
-git reset --hard "origin/$BRANCH"
-UVLOG=/tmp/malmberg-update-uv.log
-{uv} sync --frozen {extras}--project "$REPO" >"$UVLOG" 2>&1 || \
-    logger -t malmberg-update "warning: uv sync failed (see $UVLOG)"
-chown -R {user}:{user} "$REPO"
-systemctl restart {service}
-logger -t malmberg-update "updated to $REMOTE; {service} restarted"
+deploy "origin/$BRANCH"
+if healthy; then
+    logger -t malmberg-update "updated to $REMOTE; $SERVICE healthy"
+else
+    logger -t malmberg-update "ERROR: $SERVICE down on $REMOTE; rolling back $LOCAL"
+    deploy "$LOCAL"
+    healthy \
+        && logger -t malmberg-update "rolled back to $LOCAL; $SERVICE healthy" \
+        || logger -t malmberg-update "CRITICAL: $SERVICE unhealthy even after rollback"
+fi
 """
 
 _UPDATE_SERVICE_TEMPLATE = """\
