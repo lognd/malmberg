@@ -319,6 +319,64 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     color: var(--aqua);
     cursor: pointer;
   }
+  /* Display selector */
+  #display-select-row {
+    margin-top: 0.9rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  #display-select-row label {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  #display-select {
+    flex: 1 1 160px;
+    min-height: 44px;
+    padding: 0 0.6rem;
+    font-family: inherit;
+    font-size: 0.88rem;
+    background: var(--bg-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  #display-select:disabled {
+    color: var(--muted);
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  /* Year filter */
+  #year-filter-row {
+    margin-top: 0.9rem;
+  }
+  #year-filter-row .yf-label {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+  #year-filter-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  #year-filter-buttons button {
+    min-height: 40px;
+    min-width: 44px;
+    padding: 0 0.7rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #year-filter-buttons button.yf-all {
+    color: var(--aqua);
+    border-color: var(--aqua);
+  }
   /* Toasts */
   #toast-stack {
     position: fixed;
@@ -392,8 +450,17 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   /* Grid */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    grid-template-columns: repeat(6, 1fr);
     gap: 0.5rem;
+  }
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .grid { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 360px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
   }
   .tile {
     position: relative;
@@ -408,25 +475,6 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     background: var(--bg-alt);
     display: block;
   }
-  .tile .delete-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: none;
-    background: rgba(40, 40, 40, 0.75);
-    color: var(--err);
-    font-size: 1.05rem;
-    font-weight: 700;
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .tile .delete-btn:active { background: var(--err); color: #282828; }
   .tile .select-mark {
     position: absolute;
     top: 4px;
@@ -511,7 +559,18 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     color: var(--text);
     cursor: pointer;
   }
-  #bulk-hard-delete { color: var(--err); border-color: var(--err); }
+  #bulk-hard-delete {
+    color: var(--muted);
+    border-color: transparent;
+    background: transparent;
+    font-weight: 400;
+    font-size: 0.72rem;
+    min-height: 32px;
+    padding: 0 0.4rem;
+    text-decoration: underline;
+    opacity: 0.6;
+  }
+  #bulk-hard-delete:hover { color: var(--err); opacity: 1; }
   #bulk-soft-delete { color: var(--warn); border-color: var(--warn); }
   #bulk-add-playlist { color: var(--aqua); border-color: var(--aqua); }
   /* Playlists */
@@ -693,7 +752,18 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   #act-show { color: var(--accent); border-color: var(--accent); }
   #act-add-playlist { color: var(--aqua); border-color: var(--aqua); }
   #act-soft-delete { color: var(--warn); border-color: var(--warn); }
-  #act-hard-delete { color: var(--err); border-color: var(--err); }
+  #act-hard-delete {
+    color: var(--muted);
+    border: none;
+    background: transparent;
+    font-weight: 400;
+    font-size: 0.78rem;
+    min-height: 32px;
+    text-decoration: underline;
+    text-align: center;
+    opacity: 0.6;
+  }
+  #act-hard-delete:hover { color: var(--err); opacity: 1; }
   /* Playlist picker (inline, inside modal or bulk bar) */
   #playlist-picker {
     display: none;
@@ -755,6 +825,13 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     font-size: 0.75rem;
     margin-top: 1rem;
   }
+  @media (max-width: 420px) {
+    body { padding: 0.6rem; font-size: 15px; }
+    .domain { padding: 0.7rem 0.7rem 0.1rem; }
+    section { padding: 0.75rem; }
+    #modal-body { padding: 0.8rem 0.85rem 1rem; }
+    .modal-actions button { min-height: 44px; }
+  }
 </style>
 </head>
 <body>
@@ -786,6 +863,14 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
       </div>
       <div id="play-all-row">
         <button id="btn-play-all" type="button">Play whole library</button>
+      </div>
+      <div id="display-select-row">
+        <label for="display-select">Which frame</label>
+        <select id="display-select" disabled></select>
+      </div>
+      <div id="year-filter-row">
+        <div class="yf-label">Show a year on the frame</div>
+        <div id="year-filter-buttons"></div>
       </div>
       <div id="control-hint">Controls disabled: set MALMBERG_DISPLAY_URL
       on the server to enable.</div>
@@ -1079,8 +1164,11 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   var btnNext = document.getElementById("btn-next");
   var btnPause = document.getElementById("btn-pause");
   var btnPlayAll = document.getElementById("btn-play-all");
+  var displaySelect = document.getElementById("display-select");
+  var yearFilterButtons = document.getElementById("year-filter-buttons");
 
   var lastCurrentItemId = null;
+  var lastDisplaysKey = null;
 
   function setControlsDisabled(disabled) {
     btnPrev.disabled = disabled;
@@ -1107,6 +1195,22 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
     }
   }
 
+  function updateDisplaySelect(displays, selected) {
+    displays = displays || [];
+    var key = JSON.stringify(displays) + "|" + selected;
+    if (key === lastDisplaysKey) return;
+    lastDisplaysKey = key;
+    displaySelect.innerHTML = "";
+    displays.forEach(function (d) {
+      var opt = document.createElement("option");
+      opt.value = d.name;
+      opt.textContent = d.name;
+      if (d.name === selected) opt.selected = true;
+      displaySelect.appendChild(opt);
+    });
+    displaySelect.disabled = displays.length <= 1;
+  }
+
   function refreshStatus() {
     fetch("/control/status")
       .then(function (r) {
@@ -1129,6 +1233,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
           "  -  history " + data.history_count;
         btnPause.textContent = data.paused ? "Resume" : "Pause";
         setNowThumb(data.current_item_id || null);
+        updateDisplaySelect(data.displays, data.selected);
       })
       .catch(function () {
         setControlsDisabled(true);
@@ -1136,6 +1241,55 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
         nowMeta.textContent = "";
         setNowThumb(null);
       });
+  }
+
+  displaySelect.addEventListener("change", function () {
+    var name = displaySelect.value;
+    if (!name) return;
+    fetch("/control/select/" + encodeURIComponent(name), { method: "POST" })
+      .then(function (r) {
+        if (r.ok) {
+          showToast("Now controlling \\"" + name + "\\".", "ok");
+        } else {
+          showToast("Could not switch display.", "err");
+        }
+      })
+      .catch(function () { showToast("Could not switch display.", "err"); })
+      .then(function () { refreshStatus(); });
+  });
+
+  function loadYearFilter() {
+    fetch("/stats")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        yearFilterButtons.innerHTML = "";
+        var allBtn = document.createElement("button");
+        allBtn.type = "button";
+        allBtn.className = "yf-all";
+        allBtn.textContent = "All";
+        allBtn.addEventListener("click", function () {
+          runControl(allBtn, "/control/play-all", "POST", undefined,
+            "...", "Now playing the whole library.");
+        });
+        yearFilterButtons.appendChild(allBtn);
+        Object.keys(data.by_year || {}).sort().forEach(function (year) {
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = year;
+          btn.addEventListener("click", function () {
+            runControl(
+              btn,
+              "/control/play-query?q=" + encodeURIComponent(year),
+              "POST",
+              undefined,
+              "...",
+              "Now showing " + year + "."
+            );
+          });
+          yearFilterButtons.appendChild(btn);
+        });
+      })
+      .catch(function () {});
   }
 
   /* Runs a control action with immediate button feedback (busy state,
@@ -1290,30 +1444,6 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
           toggleItemSelected(item.id);
         });
       } else {
-        var del = document.createElement("button");
-        del.type = "button";
-        del.className = "delete-btn";
-        del.title = "Delete " + item.filename;
-        del.textContent = "\\u00d7";
-        del.addEventListener("click", function (e) {
-          e.stopPropagation();
-          if (!window.confirm("Delete " + item.filename + "? "
-            + "This is recoverable (goes to trash).")) return;
-          fetch("/media/" + item.id, { method: "DELETE" })
-            .then(function (r) {
-              if (r.ok) {
-                showToast("Deleted " + item.filename + ".", "ok");
-                loadStats();
-                loadGrid();
-              } else {
-                showToast("Could not delete " + item.filename + ".", "err");
-              }
-            })
-            .catch(function () {
-              showToast("Could not delete " + item.filename + ".", "err");
-            });
-        });
-        tile.appendChild(del);
         tile.addEventListener("click", function () { openModal(item.id); });
       }
 
@@ -1821,6 +1951,7 @@ DASHBOARD_PAGE_HTML = """<!doctype html>
   refreshStatus();
   loadGrid();
   loadPlaylists();
+  loadYearFilter();
   setInterval(refreshStatus, 5000);
 })();
 </script>
