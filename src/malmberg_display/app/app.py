@@ -61,6 +61,7 @@ class DisplayApp:
         overlay_cfg = OverlayConfig(
             show_clock=self._cfg.show_clock,
             show_caption=self._cfg.show_caption,
+            show_camera=self._cfg.show_camera,
             clock_position=self._cfg.clock_position,
             font_size_primary=self._cfg.overlay_font_size,
             font_size_secondary=max(16, self._cfg.overlay_font_size - 12),

@@ -67,20 +67,50 @@ def _get_font(size: int, bold: bool = False) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _draw_scrim(
-    surface: Any,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    alpha: int = 140,
-) -> None:
-    """Draw a rounded semi-transparent dark rectangle onto *surface*."""
+_GRADIENT_CACHE: dict[tuple[int, int, int], Any] = {}
+
+
+def _bottom_gradient(width: int, height: int, max_alpha: int) -> Any:
+    """Return a cached full-width surface that fades transparent->dark downward.
+
+    Used as a soft scrim behind bottom captions so text stays legible over any
+    photo without a hard-edged box.
+    """
     import pygame  # type: ignore[import-not-found]
 
-    scrim = pygame.Surface((w, h), pygame.SRCALPHA)
-    scrim.fill((0, 0, 0, alpha))
-    surface.blit(scrim, (x, y))
+    key = (width, height, max_alpha)
+    cached = _GRADIENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    grad = pygame.Surface((width, height), pygame.SRCALPHA)
+    for row in range(height):
+        # Ease-in so the darkening is gentle at the top, stronger at the bottom.
+        frac = (row / max(1, height - 1)) ** 1.6
+        alpha = int(max_alpha * frac)
+        pygame.draw.line(grad, (0, 0, 0, alpha), (0, row), (width, row))
+    _GRADIENT_CACHE[key] = grad
+    return grad
+
+
+def _blit_text_shadow(
+    surface: Any,
+    font: Any,
+    text: str,
+    pos: tuple[int, int],
+    color: tuple[int, int, int],
+    *,
+    right_align: bool = False,
+) -> tuple[int, int]:
+    """Blit *text* with a soft drop shadow; return the rendered (w, h)."""
+    fg = font.render(text, True, color)
+    shadow = font.render(text, True, (0, 0, 0))
+    x, y = pos
+    if right_align:
+        x -= fg.get_width()
+    surface.blit(shadow, (x + 2, y + 2))
+    surface.blit(fg, (x, y))
+    return fg.get_size()
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +124,7 @@ class OverlayConfig:
     __slots__ = (
         "show_clock",
         "show_caption",
+        "show_camera",
         "clock_position",
         "font_size_primary",
         "font_size_secondary",
@@ -108,6 +139,7 @@ class OverlayConfig:
         *,
         show_clock: bool = True,
         show_caption: bool = True,
+        show_camera: bool = False,
         clock_position: str = "top-right",
         font_size_primary: int = 36,
         font_size_secondary: int = 24,
@@ -118,6 +150,7 @@ class OverlayConfig:
     ) -> None:
         self.show_clock = show_clock
         self.show_caption = show_caption
+        self.show_camera = show_camera
         self.clock_position = clock_position
         self.font_size_primary = font_size_primary
         self.font_size_secondary = font_size_secondary
@@ -166,9 +199,9 @@ class ImageCaption:
         """
         date_label: Optional[str] = None
         if taken_at is not None:
-            # Normalise to local wall time for display.
+            # Normalise to local wall time; friendly "April 26, 2006" form.
             local_dt = taken_at.astimezone()
-            date_label = local_dt.strftime("%-d %B %Y")
+            date_label = local_dt.strftime("%B %-d, %Y")
 
         location_label: Optional[str] = None
         if lat is not None and lon is not None:
@@ -217,36 +250,25 @@ class OverlayRenderer:
     # ------------------------------------------------------------------
 
     def render_clock(self, surface: Any, width: int, height: int) -> None:
-        """Draw the current local time onto *surface*."""
-
+        """Draw the current time (large) and date (below) in the top-right."""
         cfg = self._cfg
         now = datetime.now()
-        label = now.strftime("%-I:%M %p")
+        time_label = now.strftime("%-I:%M %p")
+        date_label = now.strftime("%A, %B %-d")
 
-        font = _get_font(cfg.font_size_clock, bold=False)
-        text_surf = font.render(label, True, self._COLOR_CLOCK)
-        tw, th = text_surf.get_size()
-
-        pad = 14
+        time_font = _get_font(cfg.font_size_clock, bold=False)
+        date_font = _get_font(cfg.font_size_secondary, bold=False)
         m = cfg.margin
+        right = width - m
 
-        if cfg.clock_position == "top-right":
-            x = width - tw - m - pad
-            y = m
-        elif cfg.clock_position == "top-left":
-            x = m
-            y = m
-        elif cfg.clock_position == "bottom-right":
-            x = width - tw - m - pad
-            y = height - th - m - pad
-        else:
-            x = m
-            y = height - th - m - pad
-
-        _draw_scrim(
-            surface, x - pad, y - pad // 2, tw + pad * 2, th + pad, cfg.scrim_alpha
+        tw, th = _blit_text_shadow(
+            surface, time_font, time_label, (right, m), self._COLOR_CLOCK,
+            right_align=True,
         )
-        surface.blit(text_surf, (x, y))
+        _blit_text_shadow(
+            surface, date_font, date_label, (right, m + th + 2),
+            self._COLOR_SECONDARY, right_align=True,
+        )
 
     # ------------------------------------------------------------------
     # Caption
@@ -259,60 +281,43 @@ class OverlayRenderer:
         height: int,
         caption: ImageCaption,
     ) -> None:
-        """Draw the image caption strip at the bottom of *surface*."""
+        """Draw labeled photo metadata (Date / Location / Camera) bottom-left."""
         if caption.is_empty:
             return
 
         cfg = self._cfg
         m = cfg.margin
-        ls = cfg.line_spacing
+        ls = cfg.line_spacing + 4
 
-        font_primary = _get_font(cfg.font_size_primary, bold=False)
-        font_secondary = _get_font(cfg.font_size_secondary, bold=False)
+        label_font = _get_font(cfg.font_size_secondary, bold=True)
+        value_font = _get_font(cfg.font_size_secondary, bold=False)
 
-        lines: list[tuple[Any, Any]] = []  # (font, text)
+        rows: list[tuple[str, str]] = []
         if caption.date_label:
-            lines.append((font_primary, caption.date_label))
+            rows.append(("Date", caption.date_label))
         if caption.location_label:
-            lines.append((font_secondary, caption.location_label))
-        if caption.camera_label:
-            lines.append((font_secondary, caption.camera_label))
-
-        if not lines:
+            rows.append(("Location", caption.location_label))
+        if caption.camera_label and cfg.show_camera:
+            rows.append(("Camera", caption.camera_label))
+        if not rows:
             return
 
-        rendered = [
-            (
-                f,
-                f.render(
-                    t,
-                    True,
-                    self._COLOR_PRIMARY if i == 0 else self._COLOR_SECONDARY,
-                ),
-            )
-            for i, (f, t) in enumerate(lines)
-        ]
+        # Column: align all values past the widest label.
+        col_x = m + max(label_font.size(lbl)[0] for lbl, _ in rows) + 24
+        line_h = value_font.get_height()
+        total_h = line_h * len(rows) + ls * (len(rows) - 1)
 
-        total_h = sum(s.get_height() for _, s in rendered) + ls * (len(rendered) - 1)
-        max_w = max(s.get_width() for _, s in rendered)
-
-        pad_x, pad_y = 18, 14
-        block_x = m
-        block_y = height - total_h - m - pad_y
-
-        _draw_scrim(
-            surface,
-            block_x - pad_x,
-            block_y - pad_y,
-            max_w + pad_x * 2,
-            total_h + pad_y * 2,
-            cfg.scrim_alpha,
+        grad_h = min(height, total_h + m * 2 + int(height * 0.10))
+        surface.blit(
+            _bottom_gradient(width, grad_h, min(220, cfg.scrim_alpha + 60)),
+            (0, height - grad_h),
         )
 
-        cy = block_y
-        for _, surf in rendered:
-            surface.blit(surf, (block_x, cy))
-            cy += surf.get_height() + ls
+        y = height - m - total_h
+        for lbl, val in rows:
+            _blit_text_shadow(surface, label_font, lbl, (m, y), self._COLOR_SECONDARY)
+            _blit_text_shadow(surface, value_font, val, (col_x, y), self._COLOR_PRIMARY)
+            y += line_h + ls
 
     # ------------------------------------------------------------------
     # Convenience: render both regions in one call

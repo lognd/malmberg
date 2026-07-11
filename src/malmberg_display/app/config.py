@@ -45,7 +45,9 @@ class DisplayConfig(BaseModel):
     show_clock: bool = True
     """Render the current-time clock overlay on images."""
     show_caption: bool = True
-    """Render the date/location/camera caption overlay on images."""
+    """Render the date/location caption overlay on images."""
+    show_camera: bool = False
+    """Include the camera model in the caption (off by default)."""
     clock_position: str = "top-right"
     """Where to render the clock: top-right, top-left, bottom-right, bottom-left."""
     overlay_font_size: int = 36

@@ -1,25 +1,71 @@
-"""PictureDisplay: still image renderer with cross-fade and on-screen overlay."""
+"""PictureDisplay: image renderer with aspect-fit, blurred backdrop, and cross-fade."""
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import pygame  # type: ignore[import-not-found]
-from PIL import Image  # type: ignore[import-not-found]
+from PIL import Image, ImageOps  # type: ignore[import-not-found]
 
 from malmberg_display.display.overlay import ImageCaption
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
 
+# Downscale fraction for the cheap two-pass blur of the background fill.
+_BLUR_DOWNSCALE = 0.06
+# Alpha of the black wash over the blurred background so the photo stands out.
+_BG_DARKEN_ALPHA = 150
+
+
+def _scaled_size(
+    iw: int, ih: int, tw: int, th: int, *, cover: bool
+) -> tuple[int, int]:
+    """Return (w, h) that fits *iw x ih* into *tw x th* preserving aspect ratio.
+
+    cover=False -> "contain" (whole image visible, letterboxed).
+    cover=True  -> "cover"   (fills the target, cropping the overflow).
+    """
+    scale_w, scale_h = tw / iw, th / ih
+    scale = max(scale_w, scale_h) if cover else min(scale_w, scale_h)
+    return max(1, round(iw * scale)), max(1, round(ih * scale))
+
+
+def _compose_frame(src: Any, tw: int, th: int) -> Any:
+    """Compose a full-screen frame: blurred cover fill behind the fitted photo.
+
+    This is the "professional photo-frame" look -- the image is never stretched;
+    portrait/odd-ratio photos get a soft blurred version of themselves as the
+    backdrop instead of hard black bars.
+    """
+    iw, ih = src.get_size()
+    frame = pygame.Surface((tw, th)).convert()
+
+    # Background: cover-scale, cheap blur (downscale then upscale), then darken.
+    cw, ch = _scaled_size(iw, ih, tw, th, cover=True)
+    bg = pygame.transform.smoothscale(src, (cw, ch))
+    small = pygame.transform.smoothscale(
+        bg, (max(1, int(cw * _BLUR_DOWNSCALE)), max(1, int(ch * _BLUR_DOWNSCALE)))
+    )
+    bg = pygame.transform.smoothscale(small, (cw, ch))
+    frame.blit(bg, ((tw - cw) // 2, (th - ch) // 2))
+    dark = pygame.Surface((tw, th), pygame.SRCALPHA)
+    dark.fill((0, 0, 0, _BG_DARKEN_ALPHA))
+    frame.blit(dark, (0, 0))
+
+    # Foreground: contain-scale, centered, unstretched.
+    fw, fh = _scaled_size(iw, ih, tw, th, cover=False)
+    fg = pygame.transform.smoothscale(src, (fw, fh))
+    frame.blit(fg, ((tw - fw) // 2, (th - fh) // 2))
+    return frame
+
 
 class PictureDisplay(Displayable):
-    """Displays a single image file with an optional metadata overlay.
+    """Displays a single image file with a blurred backdrop and metadata overlay.
 
-    load() decodes the file with Pillow and converts it to a pygame Surface.
-    display() cross-fades from the current screen content, then renders
-    the clock and caption overlay on top.
+    load() decodes the file with Pillow (applying EXIF orientation) into a pygame
+    Surface and builds the caption. display() composes an aspect-correct frame,
+    cross-fades from the current screen content, then draws the overlay.
 
     Parameters
     ----------
@@ -39,7 +85,7 @@ class PictureDisplay(Displayable):
         self,
         path: Path,
         *,
-        taken_at: Optional[datetime] = None,
+        taken_at: Optional[Any] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
         camera_model: Optional[str] = None,
@@ -47,26 +93,36 @@ class PictureDisplay(Displayable):
     ) -> None:
         self._path = path
         self._surface: Optional[Any] = None
-        self._caption = ImageCaption.from_metadata(
-            taken_at=taken_at,
-            lat=lat,
-            lon=lon,
-            camera_model=camera_model,
-        )
+        self._taken_at = taken_at
+        self._lat = lat
+        self._lon = lon
+        self._camera_model = camera_model
+        self._caption: Optional[ImageCaption] = None
         self._dwell_override_s = dwell_override_s
 
     async def load(self, ctx: LoadContext) -> None:
-        """Decode the image into a pygame Surface on a thread pool."""
+        """Decode the image and build the caption off the event loop."""
         loop = asyncio.get_running_loop()
         self._surface = await loop.run_in_executor(None, self._decode)
+        # Caption building may call a (possibly network-bound) geocoder.
+        self._caption = await loop.run_in_executor(
+            None,
+            lambda: ImageCaption.from_metadata(
+                taken_at=self._taken_at,
+                lat=self._lat,
+                lon=self._lon,
+                camera_model=self._camera_model,
+                geocoder=ctx.geocoder,
+            ),
+        )
 
     def _decode(self) -> Any:
-        img = Image.open(self._path).convert("RGB")
-        data = img.tobytes()
-        return pygame.image.fromstring(data, img.size, img.mode)
+        """Decode with Pillow, applying EXIF orientation so photos aren't rotated."""
+        img = ImageOps.exif_transpose(Image.open(self._path)).convert("RGB")
+        return pygame.image.fromstring(img.tobytes(), img.size, img.mode)
 
     async def display(self, ctx: DisplayContext) -> None:
-        """Blit the loaded surface, render overlays, and sleep for the dwell time."""
+        """Compose an aspect-correct frame, cross-fade in, draw overlay, then dwell."""
         if self._surface is None:
             await self.load(LoadContext())
 
@@ -74,14 +130,13 @@ class PictureDisplay(Displayable):
             return
 
         w, h = ctx.width, ctx.height
-        surf = pygame.transform.scale(self._surface, (w, h))
+        frame = _compose_frame(self._surface, w, h)
 
         if ctx.fade_duration_s > 0:
-            await self._crossfade(ctx, surf)
+            await self._crossfade(ctx, frame)
         else:
-            ctx.screen.blit(surf, (0, 0))
+            ctx.screen.blit(frame, (0, 0))
 
-        # Render clock + caption on top of the scaled image.
         if ctx.overlay_renderer is not None:
             caption = self._caption if ctx.show_caption else None
             ctx.overlay_renderer.render(ctx.screen, w, h, caption)
@@ -95,24 +150,26 @@ class PictureDisplay(Displayable):
         )
         await asyncio.sleep(dwell)
 
-    async def _crossfade(self, ctx: DisplayContext, next_surf: Any) -> None:
-        """Fade from the current screen content to *next_surf* over fade_duration_s."""
-        import pygame  # noqa: PLC0415 -- pygame deferred to avoid transitive import
+    async def _crossfade(self, ctx: DisplayContext, next_frame: Any) -> None:
+        """Time-based fade to *next_frame* -- smooth even if some frames are slow."""
+        loop = asyncio.get_running_loop()
+        prev = ctx.screen.copy()
+        next_frame = next_frame.convert()  # display format => fast alpha blits
+        start = loop.time()
+        dur = ctx.fade_duration_s
 
-        w, h = ctx.width, ctx.height
-        steps = max(1, int(ctx.fade_duration_s * 30))  # ~30 fps
-        step_s = ctx.fade_duration_s / steps
-
-        prev = pygame.Surface((w, h))
-        prev.blit(ctx.screen, (0, 0))
-
-        for i in range(1, steps + 1):
-            alpha = int(255 * i / steps)
+        while True:
+            t = (loop.time() - start) / dur
+            if t >= 1.0:
+                break
+            next_frame.set_alpha(int(255 * t))
             ctx.screen.blit(prev, (0, 0))
-            next_surf.set_alpha(alpha)
-            ctx.screen.blit(next_surf, (0, 0))
+            ctx.screen.blit(next_frame, (0, 0))
+            # Keep the clock painted every frame so it stays glued (no flash).
+            if ctx.overlay_renderer is not None and ctx.show_clock:
+                ctx.overlay_renderer.render_clock(ctx.screen, ctx.width, ctx.height)
             pygame.display.flip()
-            await asyncio.sleep(step_s)
+            await asyncio.sleep(1 / 60)
 
-        next_surf.set_alpha(255)
-        ctx.screen.blit(next_surf, (0, 0))
+        next_frame.set_alpha(255)
+        ctx.screen.blit(next_frame, (0, 0))
