@@ -71,9 +71,11 @@ class DisplayApp:
         geocoder = make_geocoder()
 
         load_ctx = LoadContext(cache_dir=cache_dir, geocoder=geocoder)
+        screen = self._init_screen()
         display_ctx = DisplayContext(
-            width=self._cfg.width,
-            height=self._cfg.height,
+            screen=screen,
+            width=screen.get_width() if screen is not None else self._cfg.width,
+            height=screen.get_height() if screen is not None else self._cfg.height,
             fade_duration_s=self._cfg.fade_duration_s,
             dwell_s=self._cfg.dwell_s,
             show_clock=self._cfg.show_clock,
@@ -112,11 +114,51 @@ class DisplayApp:
                 tg.create_task(slideshow.produce_target(), name="produce")
                 tg.create_task(slideshow.display_target(), name="display")
                 tg.create_task(server.serve(), name="api")
+                if display_ctx.screen is not None:
+                    tg.create_task(self._pump_events(), name="events")
                 if discovery_mode:
                     tg.create_task(
                         self._pairing_task(slideshow, cache_dir),
                         name="discovery",
                     )
+
+    def _init_screen(self) -> Optional[Any]:
+        """Open the fullscreen pygame window and return its Surface.
+
+        Returns None if no display can be opened (e.g. headless / no X server),
+        so the API and producers still run and the process does not crash.
+        """
+        import os
+
+        import pygame  # noqa: PLC0415 -- hardware-optional import deferred to runtime
+
+        # No audio device on a photo frame; keep SDL from failing on mixer init.
+        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        try:
+            pygame.display.init()
+            pygame.font.init()
+            # (0, 0) selects the current desktop resolution for true fullscreen.
+            screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            pygame.mouse.set_visible(False)
+        except pygame.error as exc:
+            _log.error(
+                "Could not open display window (running without a screen): %s", exc
+            )
+            return None
+        w, h = screen.get_size()
+        _log.info("Display window initialized: %dx%d fullscreen", w, h)
+        return screen
+
+    async def _pump_events(self) -> None:
+        """Service the pygame event queue so the window stays responsive."""
+        import pygame  # noqa: PLC0415 -- hardware-optional import deferred to runtime
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    _log.info("Display window received QUIT.")
+                    return
+            await asyncio.sleep(0.05)
 
     def _build_producer(self, cache_dir: Any) -> ProducerType:
         """Select the initial media producer based on configuration."""
