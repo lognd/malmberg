@@ -62,6 +62,45 @@ Returns runtime health information for the server.
 
 ---
 
+### `GET /version`
+
+Returns build and runtime version details -- useful for confirming which commit a
+remotely-updated server is actually running. Every field is best-effort: values
+that cannot be determined in the current environment (no git checkout, ZFS absent)
+are `null` rather than an error.
+
+**Response: `VersionInfo`**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `malmberg_version` | str | Installed package version |
+| `git_commit` | str \| null | Full commit SHA of the deploy checkout |
+| `git_commit_short` | str \| null | First 12 chars of the commit SHA |
+| `git_branch` | str \| null | Checked-out branch |
+| `git_dirty` | bool \| null | True if the checkout has uncommitted changes |
+| `python_version` | str | Running Python interpreter version |
+| `platform` | str | OS/kernel/arch string |
+| `hardware_profile` | str | Active HAL profile name (e.g. `generic-x86`) |
+| `openzfs_version` | str \| null | Loaded OpenZFS kernel-module version |
+| `packages` | object | Versions of key dependencies (fastapi, uvicorn, pydantic, pillow) |
+
+```json
+{
+  "malmberg_version": "0.1.0",
+  "git_commit": "4ed41c01dd8acf11f6f5790a36a6ba85dde9d9ed",
+  "git_commit_short": "4ed41c01dd8a",
+  "git_branch": "main",
+  "git_dirty": false,
+  "python_version": "3.12.12",
+  "platform": "Linux-7.0.0-14-generic-x86_64-with-glibc2.41",
+  "hardware_profile": "generic-x86",
+  "openzfs_version": "2.4.1-1ubuntu5",
+  "packages": {"fastapi": "0.138.1", "uvicorn": "0.49.0", "pydantic": "2.13.4", "pillow": "12.2.0"}
+}
+```
+
+---
+
 ### `GET /media`
 
 Returns a paginated list of media items. Hidden items (`do_not_display=true`) are

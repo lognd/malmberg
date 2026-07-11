@@ -37,6 +37,21 @@ def test_status(client: TestClient) -> None:
     assert data["uptime_s"] >= 0
 
 
+def test_version(client: TestClient) -> None:
+    r = client.get("/version")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["malmberg_version"]
+    assert data["python_version"]
+    assert data["platform"]
+    assert data["hardware_profile"]
+    # git_* and openzfs_version may be None depending on environment, but the
+    # keys must always be present and packages is always a dict.
+    for key in ("git_commit", "git_branch", "openzfs_version"):
+        assert key in data
+    assert isinstance(data["packages"], dict)
+
+
 def test_list_media_empty(client: TestClient) -> None:
     r = client.get("/media")
     assert r.status_code == 200

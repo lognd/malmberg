@@ -19,6 +19,7 @@ from malmberg_server.app.config import ServerConfig
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.store import MediaStore
 from malmberg_server.ingest.upload import handle_upload
+from malmberg_server.version import VersionInfo, collect_version_info
 
 _log = get_logger(__name__)
 
@@ -86,6 +87,11 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
             version=__version__,
             mac=get_mac_address(),
         )
+
+    @app.get("/version")
+    async def version() -> VersionInfo:
+        """Report package, git commit, Python, OpenZFS, and dependency versions."""
+        return collect_version_info()
 
     @app.get("/status")
     async def status() -> ServerStatus:
