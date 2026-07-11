@@ -215,6 +215,10 @@ def build_app(cfg: ServerConfig, store: Optional[MediaStore] = None) -> FastAPI:
         result = _store.delete(item_id, _trash_root(), _media_root())
         if result.is_err:
             _raise_ingest(result.danger_err)
+        # Drop any cached thumbnails for this item so .thumbs never accumulates
+        # orphans as photos are replaced/removed.
+        for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
+            thumb.unlink(missing_ok=True)
         save = _store.save_to_disk(_index_path())
         if save.is_err:
             _log.error("Failed to persist media index after delete")
