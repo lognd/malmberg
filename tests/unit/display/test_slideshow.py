@@ -75,6 +75,28 @@ def test_load_infinite_empty_factory_stops() -> None:
         next(gen)
 
 
+async def test_async_load_infinite_retries_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty first cycle must not end the stream; it retries and recovers."""
+    from malmberg_display.slideshow.producers import infinite as inf
+
+    monkeypatch.setattr(inf, "_EMPTY_RETRY_S", 0.0)
+    calls = {"n": 0}
+
+    async def factory():  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] >= 2:  # empty on the first cycle, items thereafter
+            for name in ("a", "b"):
+                yield _Stub(name)
+
+    gen = inf.async_load_infinite(factory, shuffle=False)
+    first = await gen.__anext__()
+    assert first.name == "a"  # type: ignore[attr-defined]
+    assert calls["n"] >= 2  # it retried after the empty cycle
+    await gen.aclose()
+
+
 # -- Slideshow ---------------------------------------------------------------
 
 

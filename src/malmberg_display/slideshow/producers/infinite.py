@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 from typing import AsyncGenerator, Callable, Generator
 
 from malmberg_display.display.proto import Displayable
+
+# When an async cycle yields nothing (server has no media yet, or is briefly
+# unreachable), wait this long before re-polling instead of terminating.  This
+# keeps a freshly-provisioned display alive so it picks up photos as soon as
+# they are added, with no restart.
+_EMPTY_RETRY_S = 5.0
 
 
 def load_infinite(
@@ -37,13 +44,19 @@ async def async_load_infinite(
 
     *factory* is called at the start of each cycle to collect all items.
     Use this for ServerProducer which fetches over HTTP.
+
+    Unlike the sync variant, an empty cycle does not terminate the generator: a
+    server with no media yet (or a transient outage) is not a permanent
+    end-of-stream.  It waits ``_EMPTY_RETRY_S`` and re-polls, so newly added
+    photos appear without restarting the display.
     """
     while True:
         items: list[Displayable] = []
         async for item in factory():
             items.append(item)
         if not items:
-            return
+            await asyncio.sleep(_EMPTY_RETRY_S)
+            continue
         if shuffle:
             random.shuffle(items)
         for item in items:
