@@ -3596,10 +3596,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     "Tap a photo or a name anywhere in the library to see it, or to " +
       "show it on the TV.",
     "In the People section, tap a person's picture to see their photos " +
-      "and check the faces. Use the big \"Name this person\" button to " +
+      "and check the faces. Use the big 'Name this person' button to " +
       "give them a name.",
     "You can always come back to this tour later by pressing " +
-      "\"Help / show me around\" at the top of the page.",
+      "'Help / show me around' at the top of the page.",
   ];
   var walkthroughBackdrop = document.getElementById("walkthrough-backdrop");
   var walkthroughStepText = document.getElementById("walkthrough-step-text");
