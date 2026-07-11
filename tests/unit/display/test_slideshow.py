@@ -190,3 +190,19 @@ async def test_show_previous_steps_back_through_history() -> None:
     assert show.show_previous() is True
     assert show._override is show._history[0] and show._cursor == 0
     assert show.show_previous() is False  # at the start of history
+
+
+@pytest.mark.asyncio
+async def test_previous_then_next_walks_forward_through_history() -> None:
+    show = _make_slideshow(["a"])
+    show._history = [_Stub("1"), _Stub("2"), _Stub("3")]
+    show._cursor = 2
+    assert show.show_previous() is True and show._cursor == 1
+    assert show.show_previous() is True and show._cursor == 0
+    # Next now walks forward through the same history, not a fresh item.
+    assert show.show_next_in_history() is True
+    assert show._override is show._history[1] and show._cursor == 1
+    assert show.show_next_in_history() is True
+    assert show._override is show._history[2] and show._cursor == 2
+    # At the live end: caller must pull a fresh item instead.
+    assert show.show_next_in_history() is False

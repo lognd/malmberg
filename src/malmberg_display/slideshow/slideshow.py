@@ -74,6 +74,19 @@ class Slideshow:
         self._skip.set()
         return True
 
+    def show_next_in_history(self) -> bool:
+        """Step forward through rewound history (revisiting already-shown items).
+
+        Returns False when already at the live end -- the caller should then
+        advance to a fresh item from the producer instead of regenerating.
+        """
+        if self._cursor >= len(self._history) - 1:
+            return False
+        self._cursor += 1
+        self._override = self._history[self._cursor]
+        self._skip.set()
+        return True
+
     def flush(self) -> None:
         """Discard pre-loaded items so a producer swap takes effect immediately."""
         while not self._queue.empty():

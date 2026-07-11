@@ -96,9 +96,10 @@ def build_app(
 
     @app.post("/slideshow/next")
     async def next_item() -> dict[str, str]:
-        """Skip the current item immediately; the next one shows at once."""
+        """Advance: forward through rewound history first, else a fresh item."""
         slideshow.resume()
-        slideshow.skip()
+        if not slideshow.show_next_in_history():
+            slideshow.skip()  # already live: pull the next fresh item
         _notify("Next")
         return {"status": "ok"}
 
