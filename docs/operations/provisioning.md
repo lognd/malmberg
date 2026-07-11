@@ -236,7 +236,13 @@ or `"pi"` if `$SUDO_USER` is not set. Override with `--user <name>`.
    `Environment=DISPLAY=:0` and `Environment=XAUTHORITY=/home/<user>/.Xauthority`
    so the service can render to the physical screen without a logged-in session.
 7. Enables the service (`systemctl enable`). Does not start it; the operator
-   starts it manually after pairing.
+   starts it manually after pairing. Because the unit is `WantedBy=graphical.target`,
+   enabling is enough for it to **auto-start on every subsequent power-up** once the
+   desktop session (`DISPLAY=:0`) is up -- use desktop autologin on the Pi.
+8. Installs the same GitHub **auto-update timer** as the server (skip with
+   `--no-auto-update`), so pushing to `main` updates the display within the update
+   interval and restarts `malmberg-display`. See
+   [upgrading.md](upgrading.md#unattended-github-updates).
 
 **Pi Zero 2 W specifics:** the hardware detector automatically sets
 `playwright_supported=false` and `max_preload_queue=2` to stay within the 512 MB
@@ -247,9 +253,14 @@ RAM limit. Verify these values if you see out-of-memory errors.
 ```bash
 sudo uv run python -m malmberg_display setup --help
 
-  --user USER    Username that owns the X session (default: $SUDO_USER or 'pi')
-  --dry-run      Print what would be done without making changes
-  --no-enable    Write the systemd unit but do not enable the service
+  --user USER           Username that owns the X session (default: $SUDO_USER or 'pi')
+  --dry-run             Print what would be done without making changes
+  --no-enable           Write the systemd unit but do not enable the service
+  --no-auto-update      Do not install the GitHub auto-update timer
+  --repo-dir DIR        Checkout the auto-updater pulls into (default: this
+                        checkout, else /opt/malmberg)
+  --branch NAME         Git branch the auto-updater tracks (default: main)
+  --update-interval MIN Minutes between GitHub update checks (default: 10)
 ```
 
 ### 3. Start and pair

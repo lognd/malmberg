@@ -31,7 +31,6 @@ import grp
 import os
 import pwd
 import random
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +38,19 @@ from pathlib import Path
 from malmberg_core.hal.detect import _detect_profile, write_hardware_toml
 from malmberg_core.hal.profile import HardwareProfile
 from malmberg_core.logging import get_logger
+from malmberg_core.provision import (
+    DEFAULT_BRANCH,
+    DEFAULT_REPO_DIR,
+    DEFAULT_UPDATE_MINUTES,
+    detect_repo_dir,
+    install_github_autoupdate,
+)
+from malmberg_core.provision import (
+    has_cmd as _has_cmd,
+)
+from malmberg_core.provision import (
+    write_exec as _write_exec,
+)
 
 _log = get_logger(__name__)
 
@@ -106,13 +118,7 @@ _ARC_CONF = Path("/etc/modprobe.d/zfs.conf")
 
 _FS_SUBDIRS = ("media", "uploads", "cloud", ".trash", "logs")
 
-# Unattended GitHub updates.
-_DEFAULT_REPO_DIR = Path("/opt/malmberg")
-_DEFAULT_BRANCH = "main"
-_DEFAULT_UPDATE_MINUTES = 10
-_UPDATE_SCRIPT = Path("/usr/local/sbin/malmberg-update.sh")
-_UPDATE_SERVICE = Path("/etc/systemd/system/malmberg-update.service")
-_UPDATE_TIMER = Path("/etc/systemd/system/malmberg-update.timer")
+# Unattended GitHub updates live in malmberg_core.provision (shared with display).
 
 # EFI mirror (keep every disk in the pool independently bootable).
 _ESP_SYNC_SCRIPT = Path("/usr/local/sbin/malmberg-sync-esp.sh")
@@ -138,55 +144,6 @@ Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
-"""
-
-_UPDATE_SCRIPT_TEMPLATE = """\
-#!/bin/bash
-# Managed by `malmberg_server setup` -- edits are overwritten on the next run.
-# Pulls the latest code from GitHub and redeploys when origin/{branch} advances.
-set -euo pipefail
-export HOME=/root
-REPO="{repo_dir}"
-BRANCH="{branch}"
-cd "$REPO"
-git fetch --quiet origin "$BRANCH"
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse "origin/$BRANCH")
-if [ "$LOCAL" = "$REMOTE" ]; then
-    exit 0
-fi
-logger -t malmberg-update "new revision $REMOTE (was $LOCAL); updating"
-git reset --hard "origin/$BRANCH"
-UVLOG=/tmp/malmberg-update-uv.log
-{uv} sync --frozen --project "$REPO" >"$UVLOG" 2>&1 || \
-    logger -t malmberg-update "warning: uv sync failed (see $UVLOG)"
-chown -R {user}:{user} "$REPO"
-systemctl restart malmberg-server
-logger -t malmberg-update "updated to $REMOTE; malmberg-server restarted"
-"""
-
-_UPDATE_SERVICE_TEMPLATE = """\
-[Unit]
-Description=Pull latest Malmberg from GitHub and redeploy
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart={script}
-"""
-
-_UPDATE_TIMER_TEMPLATE = """\
-[Unit]
-Description=Check GitHub for Malmberg updates every {minutes} minutes
-
-[Timer]
-OnBootSec=3min
-OnUnitActiveSec={minutes}min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
 """
 
 # GUID that marks an EFI System Partition (constant across all GPT disks).
@@ -680,57 +637,22 @@ def _step_auto_update(
 
     repo_dir = Path(
         getattr(args, "repo_dir", None)
-        or _detect_repo_dir()
-        or _DEFAULT_REPO_DIR
+        or detect_repo_dir(Path(__file__))
+        or DEFAULT_REPO_DIR
     )
-    branch = getattr(args, "branch", None) or _DEFAULT_BRANCH
-    minutes = int(getattr(args, "update_interval", None) or _DEFAULT_UPDATE_MINUTES)
+    branch = getattr(args, "branch", None) or DEFAULT_BRANCH
+    minutes = int(getattr(args, "update_interval", None) or DEFAULT_UPDATE_MINUTES)
 
-    if not (repo_dir / ".git").exists():
-        warnings.append(
-            f"Auto-update: '{repo_dir}' is not a git checkout, so unattended "
-            "updates were not installed. Clone the repo there (or pass "
-            "--repo-dir) and re-run setup."
-        )
-        return "skipped (no git checkout)"
-
-    uv = shutil.which("uv") or "/usr/local/bin/uv"
-    if not Path(uv).exists() and not _has_cmd("uv"):
-        warnings.append(
-            "Auto-update: 'uv' not found on PATH; the updater will pull code but "
-            "cannot sync dependencies. Install uv system-wide (e.g. copy it to "
-            "/usr/local/bin/uv)."
-        )
-
-    _log.info(
-        "Installing auto-update timer: origin/%s every %d min from %s.",
-        branch,
-        minutes,
-        repo_dir,
+    summary, warns = install_github_autoupdate(
+        repo_dir=repo_dir,
+        branch=branch,
+        minutes=minutes,
+        restart_service="malmberg-server",
+        run_as_user=_SYSTEM_USER,
+        dry=dry,
     )
-    if not dry:
-        # Root must trust the (possibly non-root-owned) checkout.
-        subprocess.run(
-            ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
-            check=False,
-        )
-        _write_exec(
-            _UPDATE_SCRIPT,
-            _UPDATE_SCRIPT_TEMPLATE.format(
-                repo_dir=repo_dir, branch=branch, uv=uv, user=_SYSTEM_USER
-            ),
-        )
-        _UPDATE_SERVICE.write_text(
-            _UPDATE_SERVICE_TEMPLATE.format(script=_UPDATE_SCRIPT)
-        )
-        _UPDATE_TIMER.write_text(_UPDATE_TIMER_TEMPLATE.format(minutes=minutes))
-        subprocess.run(["systemctl", "daemon-reload"], check=False)
-        subprocess.run(
-            ["systemctl", "enable", "--now", _UPDATE_TIMER.name],
-            check=False,
-            capture_output=True,
-        )
-    return f"every {minutes}m from origin/{branch}"
+    warnings.extend(warns)
+    return summary
 
 
 def _step_pin(dry: bool) -> str:
@@ -760,11 +682,6 @@ def _require_root() -> None:
             "sudo uv run python -m malmberg_server setup"
         )
         sys.exit(2)
-
-
-def _has_cmd(cmd: str) -> bool:
-    """Return True if *cmd* is resolvable on PATH."""
-    return subprocess.run(["which", cmd], capture_output=True).returncode == 0
 
 
 def _zfs_dataset_exists(dataset: str) -> bool:
@@ -803,22 +720,6 @@ def _mem_total_bytes() -> int | None:
 def _is_mount(path: str) -> bool:
     """Return True if *path* is a mount point (robust under chroot/bind)."""
     return os.path.ismount(path)
-
-
-def _write_exec(path: Path, content: str) -> None:
-    """Write an executable script to *path* (mode 0755)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    path.chmod(0o755)
-
-
-def _detect_repo_dir() -> Path | None:
-    """Return the git checkout that contains this package, if any."""
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / ".git").exists():
-            return parent
-    return None
 
 
 def _print_summary(

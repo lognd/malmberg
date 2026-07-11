@@ -24,6 +24,13 @@ from pathlib import Path
 from malmberg_core.hal.detect import _detect_profile, write_hardware_toml
 from malmberg_core.hal.profile import HardwareProfile
 from malmberg_core.logging import get_logger
+from malmberg_core.provision import (
+    DEFAULT_BRANCH,
+    DEFAULT_REPO_DIR,
+    DEFAULT_UPDATE_MINUTES,
+    detect_repo_dir,
+    install_github_autoupdate,
+)
 
 _log = get_logger(__name__)
 
@@ -179,12 +186,19 @@ def run(args: argparse.Namespace) -> None:
     _step_unit(service_user, dry)
     steps.append(("Systemd unit", str(_SYSTEMD_UNIT)))
 
-    # 6. Enable service (but do not start -- user must pair first)
+    # 6. Enable service (but do not start -- user must pair first).  Enabling
+    #    wires it into graphical.target, so it auto-starts on every power-up
+    #    once the desktop session (DISPLAY=:0) is up.
     if not no_enable:
         _step_enable(dry, warnings)
-        steps.append(("Service", "malmberg-display enabled (start after pairing)"))
+        steps.append(
+            ("Service", "malmberg-display enabled; auto-starts at boot (pair first)")
+        )
     else:
         steps.append(("Service", "skipped (--no-enable)"))
+
+    # 7. Unattended GitHub updates.
+    steps.append(("Auto-update", _step_auto_update(args, service_user, dry, warnings)))
 
     _print_summary(steps, warnings, service_user)
 
@@ -334,6 +348,36 @@ def _step_unit(service_user: str, dry: bool) -> None:
         return
     _SYSTEMD_UNIT.write_text(content)
     subprocess.run(["systemctl", "daemon-reload"], check=False)
+
+
+def _step_auto_update(
+    args: argparse.Namespace,
+    service_user: str,
+    dry: bool,
+    warnings: list[str],
+) -> str:
+    """Install a timer that pulls origin/<branch> and restarts the display."""
+    if getattr(args, "no_auto_update", False):
+        return "disabled (--no-auto-update)"
+
+    repo_dir = Path(
+        getattr(args, "repo_dir", None)
+        or detect_repo_dir(Path(__file__))
+        or DEFAULT_REPO_DIR
+    )
+    branch = getattr(args, "branch", None) or DEFAULT_BRANCH
+    minutes = int(getattr(args, "update_interval", None) or DEFAULT_UPDATE_MINUTES)
+
+    summary, warns = install_github_autoupdate(
+        repo_dir=repo_dir,
+        branch=branch,
+        minutes=minutes,
+        restart_service="malmberg-display",
+        run_as_user=service_user,
+        dry=dry,
+    )
+    warnings.extend(warns)
+    return summary
 
 
 def _step_enable(dry: bool, warnings: list[str]) -> None:
