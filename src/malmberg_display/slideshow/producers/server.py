@@ -43,6 +43,10 @@ class CachedItem(Displayable):
     def item_id(self) -> str:
         return self._id
 
+    def __repr__(self) -> str:
+        """Friendly name (the filename) for status/history readouts."""
+        return self._path.name
+
     async def load(self, ctx: LoadContext) -> None:
         """Instantiate the appropriate Displayable for the cached file type."""
         suffix = self._path.suffix.lower()

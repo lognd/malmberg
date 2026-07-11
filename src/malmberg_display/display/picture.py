@@ -98,6 +98,10 @@ class PictureDisplay(Displayable):
         self._caption: Optional[ImageCaption] = None
         self._dwell_override_s = dwell_override_s
 
+    def __repr__(self) -> str:
+        """Friendly name (the filename) for status/history readouts."""
+        return self._path.name
+
     async def load(self, ctx: LoadContext) -> None:
         """Decode the image and build the caption off the event loop."""
         loop = asyncio.get_running_loop()
