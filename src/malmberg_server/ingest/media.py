@@ -6,15 +6,45 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import ExifTags, Image, ImageDraw, ImageOps, UnidentifiedImageError
+from PIL import ExifTags, Image, ImageDraw, ImageFile, ImageOps, UnidentifiedImageError
 from typani.result import Err, Ok, Result
 
+from malmberg_core.logging import get_logger
 from malmberg_core.models import MediaMetadata
 from malmberg_server.ingest.errors import IngestError
+
+_log = get_logger(__name__)
+
+# Some phones/cameras upload partially-written or slightly-truncated files
+# (interrupted sync, flaky wifi). Without this, Pillow raises on the final
+# chunk instead of returning the image data it *did* manage to decode.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# HEIC/HEIF/AVIF (the default iPhone photo format) are not decodable by
+# stock Pillow -- it needs a libheif binding registered as a plugin. This is
+# the single shared home for that registration; malmberg_display.display.picture
+# does the same for the display-side render path since the two packages must
+# not depend on each other. Best-effort: if pillow-heif is missing or fails to
+# load (e.g. no libheif on this platform), image ingest must not crash --
+# HEIC files will simply fail to decode downstream and be logged as such.
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except Exception:
+    _log.warning(
+        "pillow-heif unavailable; HEIC/HEIF/AVIF files will fail to decode",
+        exc_info=True,
+    )
 
 _VIDEO_EXTS = frozenset(
     {".mp4", ".mkv", ".mov", ".m4v", ".qt", ".avi", ".wmv", ".webm"}
 )
+
+# Thumbnail size for extracted video poster frames, in seconds into the clip.
+# A couple seconds in tends to skip black opening frames / fade-ins; clips
+# shorter than this just get their first decodable frame instead.
+_POSTER_FRAME_OFFSET_S = 2.0
 
 META_SCHEMA_VERSION = 1
 """Current MediaMetadata schema version stamped by extract_exif.
@@ -122,30 +152,124 @@ def make_thumbnail(
 ) -> Result[Path, IngestError]:
     """Write a square-bounded JPEG thumbnail of *src* to *dest*.
 
-    Images are EXIF-oriented and scaled to fit within *size* x *size*. Videos
-    get a lightweight generated placeholder tile (a play glyph) so the grid
-    renders without decoding the clip. Returns Ok(dest) or an IngestError.
+    Images are EXIF-oriented and scaled to fit within *size* x *size*, with
+    any non-RGB mode (CMYK/P/LA/RGBA/...) flattened to RGB before save so the
+    JPEG encoder never chokes. Videos get a real poster frame extracted a
+    couple seconds into the clip (see `_extract_video_frame`); if extraction
+    fails for any reason the previous drawn play-glyph placeholder is used
+    instead, so a thumbnail is always produced. Returns Ok(dest) or an
+    IngestError if nothing could be written at all.
     """
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         if is_video:
-            img = Image.new("RGB", (size, size), (32, 34, 40))
-            draw = ImageDraw.Draw(img)
-            c = size / 2
-            r = size / 6
-            draw.polygon(
-                [(c - r, c - r * 1.25), (c - r, c + r * 1.25), (c + r * 1.4, c)],
-                fill=(210, 210, 216),
-            )
+            img = _extract_video_frame(src, size)
+            if img is None:
+                img = _placeholder_video_tile(size)
         else:
-            img = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+            decoded = Image.open(src)
+            img = ImageOps.exif_transpose(decoded)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
             img.thumbnail((size, size))
         img.save(dest, "JPEG", quality=82)
         return Ok(dest)
+    except UnidentifiedImageError:
+        _log.warning("thumbnail: undecodable image, skipping: %s", src)
+        return Err(IngestError.ExifError)
     except OSError:
+        _log.warning("thumbnail: I/O error reading %s", src, exc_info=True)
         return Err(IngestError.IOError)
     except Exception:
+        _log.warning("thumbnail: failed to render %s", src, exc_info=True)
         return Err(IngestError.ExifError)
+
+
+def _placeholder_video_tile(size: int) -> Image.Image:
+    """Return the drawn grey play-glyph tile, used when frame extraction fails."""
+    img = Image.new("RGB", (size, size), (32, 34, 40))
+    draw = ImageDraw.Draw(img)
+    c = size / 2
+    r = size / 6
+    draw.polygon(
+        [(c - r, c - r * 1.25), (c - r, c + r * 1.25), (c + r * 1.4, c)],
+        fill=(210, 210, 216),
+    )
+    return img
+
+
+def _extract_video_frame(src: Path, size: int) -> Image.Image | None:
+    """Grab a representative frame from *src* as a scaled RGB poster image.
+
+    Uses imageio-ffmpeg's bundled ffmpeg binary (no system ffmpeg install
+    required) to pull one frame a couple seconds into the clip, falling back
+    to the first decodable frame for short clips, then overlays a small play
+    glyph so it still reads as a video in the grid. Returns None -- never
+    raises -- on any failure so the caller can fall back to the placeholder.
+    """
+    try:
+        import imageio_ffmpeg
+    except Exception:
+        _log.warning("imageio-ffmpeg unavailable; using placeholder video tile")
+        return None
+
+    try:
+        frame_bytes: bytes | None = None
+        width = height = 0
+        for offset in (_POSTER_FRAME_OFFSET_S, 0.0):
+            reader = imageio_ffmpeg.read_frames(str(src), pix_fmt="rgb24")
+            meta = next(reader)
+            width, height = meta["size"]
+            if offset:
+                # Skip ahead by dropping decoded frames until roughly `offset`
+                # seconds in, based on the reported fps; short clips exhaust
+                # the reader before reaching it and fall through to offset=0.
+                fps = meta.get("fps") or 30.0
+                skip_frames = int(offset * fps)
+                frame = None
+                for i, frame in enumerate(reader):
+                    if i >= skip_frames:
+                        break
+                if frame is not None:
+                    frame_bytes = frame
+                    break
+            else:
+                frame_bytes = next(reader, None)
+                break
+        if frame_bytes is None or not width or not height:
+            _log.warning("video frame extraction produced no frame: %s", src)
+            return None
+
+        img = Image.frombytes("RGB", (width, height), frame_bytes)
+        img.thumbnail((size, size))
+        _overlay_play_glyph(img)
+        return img
+    except Exception:
+        _log.warning("video frame extraction failed for %s", src, exc_info=True)
+        return None
+
+
+def _overlay_play_glyph(img: Image.Image) -> None:
+    """Draw a small translucent play triangle over *img* in place."""
+    w, h = img.size
+    glyph_r = min(w, h) / 8
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    circle_r = glyph_r * 1.4
+    cx, cy = w / 2, h / 2
+    draw.ellipse(
+        [cx - circle_r, cy - circle_r, cx + circle_r, cy + circle_r],
+        fill=(20, 20, 24, 140),
+    )
+    draw.polygon(
+        [
+            (cx - glyph_r * 0.6, cy - glyph_r),
+            (cx - glyph_r * 0.6, cy + glyph_r),
+            (cx + glyph_r * 0.9, cy),
+        ],
+        fill=(240, 240, 244, 230),
+    )
+    img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
 
 def _safe_ifd(exif_obj: object, ifd_id: object) -> dict:

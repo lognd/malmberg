@@ -7,10 +7,39 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pygame  # type: ignore[import-not-found]
-from PIL import Image, ImageFilter, ImageOps  # type: ignore[import-not-found]
+from PIL import (  # type: ignore[import-not-found]
+    Image,
+    ImageFile,
+    ImageFilter,
+    ImageOps,
+    UnidentifiedImageError,
+)
 
+from malmberg_core.logging import get_logger
 from malmberg_display.display.overlay import ImageCaption
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
+
+_log = get_logger(__name__)
+
+# Tolerate partially-downloaded/interrupted files rather than raising on the
+# final chunk (mirrors malmberg_server.ingest.media, which cannot be imported
+# from here without creating a server -> display layering violation).
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# HEIC/HEIF/AVIF (default iPhone photo format) need libheif registered as a
+# Pillow plugin -- stock Pillow cannot decode them. This mirrors the same
+# best-effort registration in malmberg_server.ingest.media; kept duplicated
+# rather than shared because server and display are deliberately independent
+# packages (no display -> server or server -> display import is allowed).
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except Exception:
+    _log.warning(
+        "pillow-heif unavailable; HEIC/HEIF/AVIF files will fail to decode",
+        exc_info=True,
+    )
 
 # Gaussian blur radius for the backdrop, as a fraction of the image's long edge.
 _BG_BLUR_FRACTION = 0.02
@@ -18,9 +47,7 @@ _BG_BLUR_FRACTION = 0.02
 _BG_DARKEN_ALPHA = 150
 
 
-def _scaled_size(
-    iw: int, ih: int, tw: int, th: int, *, cover: bool
-) -> tuple[int, int]:
+def _scaled_size(iw: int, ih: int, tw: int, th: int, *, cover: bool) -> tuple[int, int]:
     """Return (w, h) that fits *iw x ih* into *tw x th* preserving aspect ratio.
 
     cover=False -> "contain" (whole image visible, letterboxed).
@@ -103,9 +130,19 @@ class PictureDisplay(Displayable):
         return self._path.name
 
     async def load(self, ctx: LoadContext) -> None:
-        """Decode the image and build the caption off the event loop."""
+        """Decode the image and build the caption off the event loop.
+
+        An undecodable file (corrupt, unsupported format, HEIC without a
+        working decoder, etc.) is logged and leaves `_surface` as None
+        rather than raising -- `display()` then skips the frame instead of
+        crashing the slideshow's producer task.
+        """
         loop = asyncio.get_running_loop()
-        self._surface, self._bg = await loop.run_in_executor(None, self._decode)
+        decoded = await loop.run_in_executor(None, self._decode)
+        if decoded is None:
+            self._surface, self._bg = None, None
+            return
+        self._surface, self._bg = decoded
         # Caption building may call a (possibly network-bound) geocoder.
         self._caption = await loop.run_in_executor(
             None,
@@ -118,19 +155,42 @@ class PictureDisplay(Displayable):
             ),
         )
 
-    def _decode(self) -> tuple[Any, Any]:
-        """Decode with Pillow (EXIF-oriented); return (photo, pre-blurred backdrop)."""
-        img = ImageOps.exif_transpose(Image.open(self._path)).convert("RGB")
-        fg = pygame.image.fromstring(img.tobytes(), img.size, img.mode)
-        radius = max(2, round(max(img.size) * _BG_BLUR_FRACTION))
-        blurred = img.filter(ImageFilter.GaussianBlur(radius))
-        bg = pygame.image.fromstring(blurred.tobytes(), blurred.size, blurred.mode)
-        return fg, bg
+    def _decode(self) -> Optional[tuple[Any, Any]]:
+        """Decode with Pillow (EXIF-oriented); return (photo, pre-blurred backdrop).
+
+        Returns None on any decode failure (undecodable format, I/O error)
+        instead of raising, so the caller can degrade gracefully.
+        """
+        try:
+            raw = ImageOps.exif_transpose(Image.open(self._path))
+            if raw.mode != "RGB":
+                raw = raw.convert("RGB")
+            img = raw
+            fg = pygame.image.fromstring(img.tobytes(), img.size, img.mode)
+            radius = max(2, round(max(img.size) * _BG_BLUR_FRACTION))
+            blurred = img.filter(ImageFilter.GaussianBlur(radius))
+            bg = pygame.image.fromstring(blurred.tobytes(), blurred.size, blurred.mode)
+            return fg, bg
+        except UnidentifiedImageError:
+            _log.warning("picture: undecodable image, skipping: %s", self._path)
+            return None
+        except OSError:
+            _log.warning("picture: I/O error decoding %s", self._path, exc_info=True)
+            return None
+        except Exception:
+            _log.warning("picture: failed to decode %s", self._path, exc_info=True)
+            return None
 
     async def display(self, ctx: DisplayContext) -> None:
         """Compose an aspect-correct frame, cross-fade in, draw overlay, then dwell."""
         if self._surface is None:
             await self.load(LoadContext())
+
+        if self._surface is None:
+            # Decode failed (see _decode); skip this frame entirely rather
+            # than crash -- no blit, no dwell, the slideshow moves right on.
+            _log.warning("picture: skipping undisplayable file: %s", self._path)
+            return
 
         if ctx.screen is None:
             return

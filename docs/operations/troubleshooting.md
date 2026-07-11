@@ -58,11 +58,18 @@ Then re-upload.
 The server could not parse the file as a valid image or video. Causes:
 
 - **Corrupted or truncated file.** Partial uploads (e.g. interrupted transfer) are
-  the most common cause. Retry the upload from the source.
-- **HEIC without libheif.** HEIC files require `libheif` installed on the server:
+  tolerated up to a point (`ImageFile.LOAD_TRUNCATED_IMAGES` is enabled), but a
+  file cut off before its headers finish will still fail. Retry the upload from
+  the source.
+- **pillow-heif failed to load.** HEIC/HEIF/AVIF decoding (the default iPhone
+  photo format) is provided by the `pillow-heif` dependency, registered as a
+  Pillow plugin at import time in both `malmberg_server.ingest.media` and
+  `malmberg_display.display.picture`. This is best-effort: if `pillow-heif`
+  cannot be imported on a given platform, a warning is logged at startup and
+  HEIC/HEIF/AVIF files fail to decode (422) instead of crashing ingest. Check
+  server logs for `pillow-heif unavailable` and reinstall if needed:
   ```bash
-  sudo apt install libheif-dev
-  pip install Pillow --force-reinstall   # recompile with libheif support
+  uv pip install --force-reinstall pillow-heif
   ```
 - **Unsupported raw format.** CR2, ARW, NEF, and other raw camera formats are not
   currently supported. Convert to JPEG or DNG before uploading.
