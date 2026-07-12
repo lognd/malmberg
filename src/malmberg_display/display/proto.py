@@ -57,6 +57,18 @@ class DisplayContext(BaseModel):
     mute_video: bool = True
     """Mute video audio by default; the API unmutes only when the user manually
     shows a single item (so the ambient slideshow never plays sound)."""
+    hw_video_decode: bool = False
+    """Whether mpv may use hardware decoding (from the HAL profile).
+
+    This was never populated, so mpv always ran with hwdec=no -- software
+    decoding video on a Pi, which is why playback was choppy.
+    """
+    video_max_s: float = 600.0
+    """Give up on a clip after this long (0 disables).
+
+    Guards against a video that stalls forever in mpv: without a cap the
+    display task blocks on it and the whole frame freezes.
+    """
 
 
 class Displayable(ABC):

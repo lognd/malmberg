@@ -237,7 +237,27 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--text);
     outline: none;
   }
-  #clear-all-row { margin-top: 0.5rem; }
+  /* Keep the Clear button on the same line as its input. */
+  .filter-box-row .search-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0;
+  }
+  .filter-box-row .search-row input { flex: 1 1 auto; min-width: 0; }
+  #clear-all-row, #clear-frame-row { margin-top: 0.5rem; }
+  #clear-frame-filters {
+    min-height: 44px;
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--bg-alt);
+    color: var(--accent);
+    cursor: pointer;
+  }
   #clear-all-filters {
     min-height: 44px;
     padding: 0.4rem 1rem;
@@ -1787,9 +1807,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         </div>
         <div class="filter-box-row">
           <label for="frame-time-input">Time</label>
-          <input id="frame-time-input" type="text" autocomplete="off"
-            aria-label="Show photos from a time, e.g. 2006 or 2006-07"
-            placeholder="e.g. 2006 or 2006-07">
+          <div class="search-row">
+            <input id="frame-time-input" type="text" autocomplete="off"
+              aria-label="Show photos from a time, e.g. 2006 or 2006-07"
+              placeholder="e.g. 2006 or 2006-07">
+            <button id="clear-frame-time" type="button" class="clear-btn"
+                    aria-label="Clear the time selection">Clear</button>
+          </div>
         </div>
         <div class="filter-box-row">
           <label for="frame-place-input">Place</label>
@@ -1799,6 +1823,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
               aria-label="Show photos from a place"
               placeholder="e.g. Tampa">
             <datalist id="frame-place-suggestions"></datalist>
+            <button id="clear-frame-place" type="button" class="clear-btn"
+                    aria-label="Clear the place selection">Clear</button>
           </div>
         </div>
         <div class="filter-box-row">
@@ -1809,7 +1835,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
               aria-label="Show photos of a person"
               placeholder="By a person's name">
             <datalist id="frame-person-suggestions"></datalist>
+            <button id="clear-frame-person" type="button" class="clear-btn"
+                    aria-label="Clear the person selection">Clear</button>
           </div>
+        </div>
+        <div id="clear-frame-row">
+          <button id="clear-frame-filters" type="button">Clear all</button>
         </div>
         <div id="frame-play-row">
           <button id="frame-search-play-btn" type="button">Show on frame</button>
@@ -2863,6 +2894,34 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       person: framePersonInput.value.trim(),
     };
   }
+
+  /* Clear buttons for the frame boxes, so a chosen year/place/person can be
+     undone without retyping. Each clears its box and refreshes the preview. */
+  function clearFrameBox(input) {
+    input.value = "";
+    setActiveYear(null);
+    loadFramePreview(1);
+  }
+
+  document
+    .getElementById("clear-frame-time")
+    .addEventListener("click", function () { clearFrameBox(frameTimeInput); });
+  document
+    .getElementById("clear-frame-place")
+    .addEventListener("click", function () { clearFrameBox(framePlaceInput); });
+  document
+    .getElementById("clear-frame-person")
+    .addEventListener("click", function () { clearFrameBox(framePersonInput); });
+  document
+    .getElementById("clear-frame-filters")
+    .addEventListener("click", function () {
+      frameTimeInput.value = "";
+      framePlaceInput.value = "";
+      framePersonInput.value = "";
+      setActiveYear(null);
+      loadFramePreview(1);
+      showToast("Selection cleared.", "ok");
+    });
 
   function frameHasFilter(f) {
     return !!(f.time || f.place || f.person);

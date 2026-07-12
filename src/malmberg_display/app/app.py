@@ -21,6 +21,7 @@ from malmberg_display.display.overlay import (
 )
 from malmberg_display.display.proto import Displayable, DisplayContext, LoadContext
 from malmberg_display.display.toast import Toast
+from malmberg_display.display.video import make_player
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.directory import load_flat_from_directory
 from malmberg_display.slideshow.producers.infinite import (
@@ -74,6 +75,10 @@ class DisplayApp:
 
         load_ctx = LoadContext(cache_dir=cache_dir, geocoder=geocoder)
         screen = self._init_screen()
+        # One mpv player for the whole run, drawing INTO our pygame window.
+        # A per-clip mpv window (the old behaviour) flashed the desktop every
+        # time it was created and destroyed, and stuttered.
+        mpv_player = make_player(self._window_id(screen), self._profile.hw_video_decode)
         display_ctx = DisplayContext(
             screen=screen,
             width=screen.get_width() if screen is not None else self._cfg.width,
@@ -83,6 +88,9 @@ class DisplayApp:
             show_clock=self._cfg.show_clock,
             show_caption=self._cfg.show_caption,
             overlay_renderer=overlay_renderer,
+            mpv_player=mpv_player,
+            hw_video_decode=self._profile.hw_video_decode,
+            video_max_s=self._cfg.video_max_s,
         )
 
         async with httpx.AsyncClient() as client:
@@ -165,6 +173,19 @@ class DisplayApp:
                         self._pairing_task(slideshow, cache_dir),
                         name="discovery",
                     )
+
+    def _window_id(self, screen: Optional[Any]) -> Optional[int]:
+        """Return the X11 window id of the pygame window, for embedding mpv."""
+        if screen is None:
+            return None
+        import pygame  # noqa: PLC0415 -- hardware-optional import deferred
+
+        try:
+            wid = pygame.display.get_wm_info().get("window")
+        except Exception as exc:
+            _log.warning("Could not get window id for mpv embedding: %s", exc)
+            return None
+        return int(wid) if wid else None
 
     def _init_screen(self) -> Optional[Any]:
         """Open the fullscreen pygame window and return its Surface.

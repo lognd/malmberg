@@ -27,6 +27,12 @@ class DisplayConfig(BaseModel):
     config_path: Path = Path("~/.config/malmberg/display.toml")
     cache_dir: Path = Path("~/.cache/malmberg/display")
     dwell_s: float = 10.0
+    video_max_s: float = 600.0
+    """Give up on a video clip after this long, in seconds (0 = never).
+
+    A clip that stalls in mpv would otherwise block the display task
+    forever and freeze the whole frame.
+    """
     fade_duration_s: float = 0.5
     web_overlays: bool = False
     """Enable playwright-based web overlays (requires playwright_supported HAL flag)."""
