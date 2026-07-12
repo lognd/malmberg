@@ -42,6 +42,34 @@ Live Photos bring a paired .mov.
 Photos with no EXIF date or GPS (scans, old cameras) can still be tagged by
 hand afterwards from the dashboard (per photo, or in bulk from the select bar).
 
+## Google Photos (Takeout) -- fix the EXIF first
+
+Google Takeout is the only way to get your whole Google Photos library: the
+Photos API cannot read photos the app did not upload (see cloud-sync.md).
+
+**Takeout does not keep your location in the image files.** It strips GPS out
+and writes the real metadata into a per-photo JSON sidecar
+(`IMG_1234.jpg.json`, or `IMG_1234.jpg.supplemental-metadata.json` in newer
+exports). Upload the photos as-is and most arrive with no place and often no
+capture date, so they never appear in the place search, the time filters, or
+the by-year / by-month / by-place stats.
+
+Bake the sidecars back into the files first:
+
+    brew install exiftool
+    python3 scripts/fix_google_takeout_exif.py -n ~/Downloads/Takeout   # dry run
+    python3 scripts/fix_google_takeout_exif.py    ~/Downloads/Takeout
+    ./scripts/upload_from_mac.sh                  ~/Downloads/Takeout
+
+The dry run reports how many photos will get a capture date, how many will get
+GPS, and how many have no sidecar at all. It handles the sidecar naming
+variants (classic, `supplemental-metadata`, and the `IMG_0003(1).jpg` ->
+`IMG_0003.jpg(1).json` duplicate quirk) and ignores Takeout's `0.0, 0.0`
+"no location" marker rather than geocoding those photos into the ocean.
+
+When requesting the Takeout, choose Google Photos only, and prefer larger
+archive parts (e.g. 50 GB) so you unzip fewer files.
+
 ## Run it
 
     ./scripts/upload_from_mac.sh ~/Desktop/exported-photos
