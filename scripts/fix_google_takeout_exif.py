@@ -97,6 +97,95 @@ def read_sidecar(path: Path) -> dict:
     return out
 
 
+# exiftool's FileType -> the extensions that legitimately name that format.
+# The first entry is the one we rename to.
+_TYPE_EXTS: dict[str, tuple[str, ...]] = {
+    "JPEG": (".jpg", ".jpeg"),
+    "PNG": (".png",),
+    "HEIC": (".heic",),
+    "HEIF": (".heif",),
+    "AVIF": (".avif",),
+    "TIFF": (".tif", ".tiff"),
+    "WEBP": (".webp",),
+    "GIF": (".gif",),
+    "BMP": (".bmp",),
+    "MP4": (".mp4", ".m4v"),
+    "MOV": (".mov",),
+    "AVI": (".avi",),
+    "MKV": (".mkv",),
+    "WEBM": (".webm",),
+}
+
+
+def detect_types(media_files: list[Path]) -> dict[Path, str]:
+    """Ask exiftool what each file ACTUALLY is, ignoring its name.
+
+    One batch call: per-file invocations would take hours on a big Takeout.
+    """
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".args", delete=False, encoding="utf-8"
+    ) as f:
+        f.write("-m\n-p\n$FilePath\t$FileType\n")
+        f.write("\n".join(str(p) for p in media_files) + "\n")
+        argfile = f.name
+    try:
+        proc = subprocess.run(
+            ["exiftool", "-@", argfile, "-charset", "filename=utf8"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        Path(argfile).unlink(missing_ok=True)
+
+    # exiftool echoes $FilePath as an absolute path regardless of how it was
+    # given, so key on the resolved path or every lookup misses.
+    out: dict[Path, str] = {}
+    for line in proc.stdout.splitlines():
+        path, _, ftype = line.partition("\t")
+        if path and ftype:
+            out[Path(path).resolve()] = ftype.strip().upper()
+    return out
+
+
+def rename_mismatched(media_files: list[Path], *, dry_run: bool) -> tuple[list[Path], int]:
+    """Rename files whose extension lies about their contents.
+
+    Google re-encodes some photos to JPEG but keeps the original ``.HEIC``
+    name.  exiftool refuses to write to a file whose extension contradicts its
+    contents ("Not a valid HEIC (looks more like a JPEG)") and writes NOTHING
+    to it -- so those photos would keep arriving with no date and no GPS, which
+    is the exact problem this script exists to solve.  No flag suppresses that;
+    the name has to match the bytes.  Fixing the name also stops anything
+    downstream that trusts the extension from mis-handling the file.
+
+    Returns the (possibly renamed) file list and the number renamed.
+    """
+    types = detect_types(media_files)
+    result: list[Path] = []
+    renamed = 0
+    for media in media_files:
+        ftype = types.get(media.resolve())
+        exts = _TYPE_EXTS.get(ftype or "")
+        if exts is None or media.suffix.lower() in exts:
+            result.append(media)  # unknown type, or the name already tells the truth
+            continue
+        target = media.with_suffix(exts[0])
+        # Never clobber a real, different photo that already owns the name.
+        n = 1
+        while target.exists():
+            target = media.with_name(f"{media.stem}-{n}{exts[0]}")
+            n += 1
+        print(f"  {media.name} is really {ftype} -> {target.name}")
+        renamed += 1
+        if dry_run:
+            result.append(media)  # nothing moved; keep reporting against the old name
+            continue
+        media.rename(target)
+        result.append(target)
+    return result, renamed
+
+
 def build_args(media: Path, meta: dict) -> list[str]:
     """Build the exiftool argument block that writes *meta* into *media*."""
     args: list[str] = []
@@ -146,43 +235,53 @@ def main() -> int:
     if not media_files:
         return 0
 
-    blocks: list[str] = []
-    with_date = with_gps = no_sidecar = nothing = 0
-
-    for media in media_files:
-        sidecar = find_sidecar(media)
-        if sidecar is None:
-            no_sidecar += 1
-            continue
-        meta = read_sidecar(sidecar)
-        args = build_args(media, meta)
-        if not args:
-            nothing += 1
-            continue
-        if "taken" in meta:
-            with_date += 1
-        if "lat" in meta:
-            with_gps += 1
-        blocks.extend(args)
-
-    print(f"  will set capture date on: {with_date}")
-    print(f"  will set GPS on:          {with_gps}")
-    print(f"  no sidecar found:         {no_sidecar}")
-    print(f"  sidecar had nothing:      {nothing}")
-
-    if ns.dry_run:
-        print("\ndry run: nothing written")
-        return 0
-    if not blocks:
-        print("\nnothing to write")
-        return 0
-
     if not shutil_which("exiftool"):
         print(
             "\nerror: exiftool not found. Install it with:  brew install exiftool",
             file=sys.stderr,
         )
         return 1
+
+    # Match sidecars BEFORE any rename: the sidecar is named after the file's
+    # ORIGINAL name (IMG_1.HEIC.json), so renaming first would orphan it.
+    pending: list[tuple[Path, dict]] = []
+    no_sidecar = nothing = 0
+    for media in media_files:
+        sidecar = find_sidecar(media)
+        if sidecar is None:
+            no_sidecar += 1
+            continue
+        meta = read_sidecar(sidecar)
+        if not build_args(media, meta):
+            nothing += 1
+            continue
+        pending.append((media, meta))
+
+    # Then fix any name that lies about its contents, or exiftool will refuse to
+    # write to it and the photo keeps its missing date/GPS.
+    paths, renamed = rename_mismatched([m for m, _ in pending], dry_run=ns.dry_run)
+
+    blocks: list[str] = []
+    with_date = with_gps = 0
+    for path, (_, meta) in zip(paths, pending):
+        if "taken" in meta:
+            with_date += 1
+        if "lat" in meta:
+            with_gps += 1
+        blocks.extend(build_args(path, meta))
+
+    print(f"  will set capture date on: {with_date}")
+    print(f"  will set GPS on:          {with_gps}")
+    print(f"  misnamed (renamed):       {renamed}")
+    print(f"  no sidecar found:         {no_sidecar}")
+    print(f"  sidecar had nothing:      {nothing}")
+
+    if ns.dry_run:
+        print("\ndry run: nothing written, nothing renamed")
+        return 0
+    if not blocks:
+        print("\nnothing to write")
+        return 0
 
     # One exiftool invocation for the whole library: per-file calls would take
     # hours on a big Takeout.
@@ -193,13 +292,8 @@ def main() -> int:
         argfile = f.name
 
     print("\nWriting EXIF with exiftool (this can take a while)...")
-    # -m: Google re-encodes some photos but keeps the original extension, so a
-    # file named .HEIC can hold JPEG bytes.  Without -m exiftool calls that a
-    # fatal "Not a valid HEIC" and writes NOTHING to the file, silently leaving
-    # it with no date and no GPS.  -m demotes it to a warning and writes using
-    # the format actually detected.
     proc = subprocess.run(
-        ["exiftool", "-m", "-@", argfile, "-common_args", "-charset", "filename=utf8"],
+        ["exiftool", "-@", argfile, "-common_args", "-charset", "filename=utf8"],
         check=False,
     )
     Path(argfile).unlink(missing_ok=True)

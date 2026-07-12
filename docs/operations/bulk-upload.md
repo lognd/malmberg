@@ -61,6 +61,14 @@ Bake the sidecars back into the files first:
     python3 scripts/fix_google_takeout_exif.py    ~/Downloads/Takeout
     ./scripts/upload_from_mac.sh                  ~/Downloads/Takeout
 
+Some photos come out of Takeout re-encoded to JPEG but still named `.HEIC`.
+exiftool refuses to write to a file whose extension contradicts its contents
+(`Not a valid HEIC (looks more like a JPEG)`) and writes nothing at all to it,
+so those photos would keep their missing date and GPS -- exactly what this
+script is for. It therefore renames such files to their true extension before
+writing; the dry run lists them under "misnamed (renamed)" without moving
+anything.
+
 The dry run reports how many photos will get a capture date, how many will get
 GPS, and how many have no sidecar at all. It handles the sidecar naming
 variants (classic, `supplemental-metadata`, and the `IMG_0003(1).jpg` ->
