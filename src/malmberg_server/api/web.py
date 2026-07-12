@@ -221,6 +221,34 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   .month-chip b { color: var(--aqua); font-weight: 700; }
   /* Hierarchical time/place breakdowns. A flat chip list ran to hundreds of
      entries; these collapse (native <details>) and scroll instead. */
+  .clear-btn {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .clear-btn:hover, .clear-btn:focus-visible {
+    border-color: var(--accent);
+    color: var(--text);
+    outline: none;
+  }
+  #clear-all-row { margin-top: 0.5rem; }
+  #clear-all-filters {
+    min-height: 44px;
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--bg-alt);
+    color: var(--accent);
+    cursor: pointer;
+  }
   .tree-block { margin-top: 0.9rem; }
   .tree-head {
     display: flex;
@@ -246,6 +274,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     color: var(--muted);
     cursor: pointer;
   }
+  /* Collapsed nodes tile across the width; an open one spans the full row so
+     its children get the space (a plain vertical list wasted most of it). */
+  .tree-box, .tree-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 0.15rem 0.4rem;
+    align-content: start;
+  }
   .tree-box {
     max-height: 22rem;
     overflow-y: auto;
@@ -254,11 +290,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     background: var(--bg-alt);
     padding: 0.4rem 0.5rem;
   }
+  .tree-node { min-width: 0; }
+  .tree-node[open] { grid-column: 1 / -1; }
   .tree-node > summary {
     cursor: pointer;
     list-style: none;
-    padding: 0.45rem 0.3rem;
-    min-height: 40px;
+    padding: 0.3rem 0.3rem;
+    min-height: 34px;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -285,22 +323,32 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     margin-left: 1rem;
     padding-left: 0.5rem;
     border-left: 1px solid var(--border);
+  }
+  /* Leaf rows (months, cities) wrap as chips so they fill the width instead
+     of running one-per-line down the page. */
+  .tree-leaves {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.15rem;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.25rem 0 0.4rem;
   }
   .tree-leaf {
     min-height: 38px;
-    width: 100%;
     text-align: left;
-    padding: 0.3rem 0.5rem;
+    padding: 0.3rem 0.6rem;
     font-size: 0.85rem;
     border-radius: 6px;
-    border: 1px solid transparent;
-    background: none;
+    border: 1px solid var(--border);
+    background: var(--bg);
     color: var(--text);
     cursor: pointer;
+    white-space: nowrap;
+  }
+  .tree-leaf.tn-all {
+    display: block;
+    width: auto;
+    border-color: transparent;
+    background: none;
   }
   .tree-leaf:hover, .tree-leaf:focus-visible {
     background: var(--panel);
@@ -1851,9 +1899,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       </h2>
       <div class="filter-box-row">
         <label for="time-input">Time</label>
-        <input id="time-input" type="text" autocomplete="off"
-          aria-label="Filter by time, e.g. 2006 or 2006-07"
-          placeholder="e.g. 2006 or 2006-07">
+        <div class="search-row">
+          <input id="time-input" type="text" autocomplete="off"
+            aria-label="Filter by time, e.g. 2006 or 2006-07"
+            placeholder="e.g. 2006 or 2006-07">
+          <button id="clear-time" type="button" class="clear-btn"
+                  aria-label="Clear the time filter">Clear</button>
+        </div>
       </div>
       <div class="filter-box-row">
         <label for="place-input">Place</label>
@@ -1863,6 +1915,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             aria-label="Filter by place"
             placeholder="e.g. Tampa">
           <datalist id="place-suggestions"></datalist>
+          <button id="clear-place" type="button" class="clear-btn"
+                  aria-label="Clear the place filter">Clear</button>
         </div>
       </div>
       <div class="filter-box-row">
@@ -1873,7 +1927,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             aria-label="Filter by a person's name"
             placeholder="By a person's name">
           <datalist id="person-suggestions"></datalist>
+          <button id="clear-person" type="button" class="clear-btn"
+                  aria-label="Clear the person filter">Clear</button>
         </div>
+      </div>
+      <div id="clear-all-row">
+        <button id="clear-all-filters" type="button">Clear all filters</button>
       </div>
     </section>
 
@@ -2205,7 +2264,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     CH: 'Switzerland', AT: 'Austria', GR: 'Greece', TR: 'Turkey',
     AU: 'Australia', NZ: 'New Zealand', BR: 'Brazil', AR: 'Argentina',
     RU: 'Russia', IN: 'India', ZA: 'South Africa', NO: 'Norway',
-    DK: 'Denmark', FI: 'Finland', PL: 'Poland', CZ: 'Czechia'
+    DK: 'Denmark', FI: 'Finland', PL: 'Poland', CZ: 'Czechia',
+    EC: 'Ecuador', MY: 'Malaysia', PA: 'Panama', MA: 'Morocco',
+    CR: 'Costa Rica', HN: 'Honduras', BM: 'Bermuda', BS: 'Bahamas',
+    PH: 'Philippines', GI: 'Gibraltar', PE: 'Peru', CL: 'Chile',
+    DO: 'Dominican Republic', JM: 'Jamaica', TH: 'Thailand',
+    VN: 'Vietnam', KR: 'South Korea', IS: 'Iceland', HR: 'Croatia',
+    RO: 'Romania', BG: 'Bulgaria', EE: 'Estonia', LV: 'Latvia',
+    LT: 'Lithuania', SK: 'Slovakia', SI: 'Slovenia', RS: 'Serbia',
+    UA: 'Ukraine', IL: 'Israel', AE: 'United Arab Emirates', EG: 'Egypt',
+    KE: 'Kenya', MT: 'Malta', LU: 'Luxembourg', CY: 'Cyprus'
   };
 
   function treeNode(label, count, opts) {
@@ -2254,6 +2322,18 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     showResultsBelow();
   }
 
+  function leafRow() {
+    var row = document.createElement('div');
+    row.className = 'tree-leaves';
+    return row;
+  }
+
+  function groupGrid() {
+    var g = document.createElement('div');
+    g.className = 'tree-groups';
+    return g;
+  }
+
   function renderTimeTree(byYear, byMonth) {
     var box = document.getElementById('by-time');
     box.innerHTML = '';
@@ -2268,15 +2348,15 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           pickTime(year);
         })
       );
+      var row = leafRow();
       (months[year] || []).sort().reverse().forEach(function (ym) {
         var mi = parseInt(ym.slice(5, 7), 10) - 1;
         var name = MONTH_NAMES[mi] || ym.slice(5, 7);
-        group.kids.appendChild(
-          treeLeaf(name + ' ' + year, byMonth[ym], false, function () {
-            pickTime(ym);
-          })
+        row.appendChild(
+          treeLeaf(name, byMonth[ym], false, function () { pickTime(ym); })
         );
       });
+      group.kids.appendChild(row);
       box.appendChild(group.node);
     });
     if (!box.children.length) {
@@ -2287,19 +2367,27 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   function renderPlaceTree(byPlace) {
     var box = document.getElementById('by-place');
     box.innerHTML = '';
-    // Labels are 'City, Region, CC' -- fold them into country > region > city.
+    // Labels are 'City, Region, CC', but city-states come back as just
+    // 'Singapore, SG' (no region) -- those used to fall into a bogus "??"
+    // country. Treat the last part as the country code whenever there is
+    // more than one part, and only nest a region level when there is one.
     var tree = {};
     Object.keys(byPlace).forEach(function (label) {
       var parts = label.split(',').map(function (s) { return s.trim(); });
-      var cc = parts.length >= 3 ? parts[parts.length - 1] : '??';
-      var region = parts.length >= 2 ? parts[parts.length - 2] : label;
+      var n = byPlace[label];
       var city = parts[0];
-      var country = (tree[cc] = tree[cc] || { n: 0, regions: {} });
-      country.n += byPlace[label];
+      var cc = parts.length >= 2 ? parts[parts.length - 1] : 'Unknown';
+      var region = parts.length >= 3 ? parts[parts.length - 2] : null;
+      var country = (tree[cc] = tree[cc] || { n: 0, regions: {}, cities: [] });
+      country.n += n;
+      if (region === null) {
+        country.cities.push({ city: city, label: label, n: n });
+        return;
+      }
       var reg = (country.regions[region] = country.regions[region] ||
         { n: 0, cities: [] });
-      reg.n += byPlace[label];
-      reg.cities.push({ city: city, label: label, n: byPlace[label] });
+      reg.n += n;
+      reg.cities.push({ city: city, label: label, n: n });
     });
 
     Object.keys(tree)
@@ -2313,6 +2401,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
             pickPlace(', ' + cc);
           })
         );
+        // Cities that have no region (city-states) sit directly under it.
+        if (country.cities.length) {
+          var direct = leafRow();
+          country.cities
+            .sort(function (a, b) { return b.n - a.n; })
+            .forEach(function (c) {
+              direct.appendChild(
+                treeLeaf(c.city, c.n, false, function () { pickPlace(c.label); })
+              );
+            });
+          cNode.kids.appendChild(direct);
+        }
+        var grid = groupGrid();
         Object.keys(country.regions)
           .sort(function (a, b) {
             return country.regions[b].n - country.regions[a].n;
@@ -2325,17 +2426,18 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
                 pickPlace(region);
               })
             );
+            var row = leafRow();
             reg.cities
               .sort(function (a, b) { return b.n - a.n; })
               .forEach(function (c) {
-                rNode.kids.appendChild(
-                  treeLeaf(c.city, c.n, false, function () {
-                    pickPlace(c.label);
-                  })
+                row.appendChild(
+                  treeLeaf(c.city, c.n, false, function () { pickPlace(c.label); })
                 );
               });
-            cNode.kids.appendChild(rNode.node);
+            rNode.kids.appendChild(row);
+            grid.appendChild(rNode.node);
           });
+        if (grid.children.length) cNode.kids.appendChild(grid);
         box.appendChild(cNode.node);
       });
     if (!box.children.length) {
@@ -3295,6 +3397,49 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       if (state.qPerson) showResultsBelow();
     }, 350);
   });
+
+  /* Clear buttons: every filter can be undone, individually or all at once
+     (there was no way to get back to "everything" once a filter was set). */
+  function applyFilters(reveal) {
+    state.page = 1;
+    loadGrid();
+    if (reveal) showResultsBelow();
+  }
+
+  document.getElementById("clear-time").addEventListener("click", function () {
+    timeInput.value = "";
+    state.qTime = "";
+    applyFilters(false);
+  });
+
+  document.getElementById("clear-place").addEventListener("click", function () {
+    placeInput.value = "";
+    state.qPlace = "";
+    applyFilters(false);
+  });
+
+  document.getElementById("clear-person").addEventListener("click", function () {
+    personInput.value = "";
+    state.qPerson = "";
+    applyFilters(false);
+  });
+
+  document
+    .getElementById("clear-all-filters")
+    .addEventListener("click", function () {
+      timeInput.value = "";
+      placeInput.value = "";
+      personInput.value = "";
+      state.qTime = "";
+      state.qPlace = "";
+      state.qPerson = "";
+      if (searchInput) {
+        searchInput.value = "";
+        state.q = "";
+      }
+      applyFilters(false);
+      showToast("Filters cleared.", "ok");
+    });
 
   loadPlaceSuggestions("", placeSuggestions);
   loadPersonSuggestions("", personSuggestions);
