@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from malmberg_display.display.proto import LoadContext
 from malmberg_display.slideshow.producers.cache import CacheProducer
 from malmberg_display.slideshow.producers.server import CachedItem, ServerProducer
 
@@ -211,6 +212,15 @@ async def test_server_producer_redownloads_when_sha256_changes(
 
     assert len(items) == 1
     new_cache_dir = tmp_path / "abc" / "newsha0000bb"
+    # Enumerating must NOT download: the producer is drained end-to-end each
+    # cycle, so downloading here would pull the whole library onto the Pi
+    # before a single photo is shown (this filled the Pi's card and blacked
+    # out the frame). The fetch happens in load(), throttled by the queue.
+    assert not (new_cache_dir / "photo.jpg").exists(), (
+        "enumeration must not download; fetch belongs in load()"
+    )
+
+    await items[0].load(LoadContext(cache_dir=tmp_path))
     assert (new_cache_dir / "photo.jpg").read_bytes() == b"new-bytes"
     # The old cache entry is untouched (left behind, not read or deleted).
     assert (tmp_path / "abc" / "oldsha0000aa" / "photo.jpg").read_bytes() == (

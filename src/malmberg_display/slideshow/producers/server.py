@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Sequence
+from typing import AsyncGenerator, Awaitable, Callable, Optional, Sequence
 
 import httpx
 
@@ -18,13 +18,23 @@ _VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
 class CachedItem(Displayable):
-    """A Displayable that wraps an already-downloaded local file plus EXIF metadata."""
+    """A Displayable for one server media item, fetched on demand.
+
+    The file is NOT downloaded when this is constructed -- only when ``load``
+    is called, which the slideshow does just before the item is queued for
+    display.  That matters: the producer is drained end-to-end (to shuffle a
+    cycle) before anything is shown, so downloading during enumeration would
+    pull the entire library onto the Pi up front, filling its card.  Fetching
+    in ``load`` instead throttles downloads to the slideshow's small pre-load
+    queue -- a few photos ahead of the one on screen.
+    """
 
     def __init__(
         self,
         path: Path,
         item_id: str,
         *,
+        fetch: Optional[Callable[[], Awaitable[bool]]] = None,
         taken_at: Optional[datetime] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
@@ -33,6 +43,7 @@ class CachedItem(Displayable):
     ) -> None:
         self._path = path
         self._id = item_id
+        self._fetch = fetch
         self._taken_at = taken_at
         self._lat = lat
         self._lon = lon
@@ -49,7 +60,11 @@ class CachedItem(Displayable):
         return self._path.name
 
     async def load(self, ctx: LoadContext) -> None:
-        """Instantiate the appropriate Displayable for the cached file type."""
+        """Fetch the file if needed, then build the right Displayable for it."""
+        if self._fetch is not None:
+            if not await self._fetch():
+                self._delegate = None
+                return
         suffix = self._path.suffix.lower()
         if suffix in _VIDEO_SUFFIXES:
             from malmberg_display.display.video import VideoDisplay
@@ -270,23 +285,13 @@ class ServerProducer:
             return None
         return resp.json()
 
-    async def _item_from_raw(self, raw: dict) -> Optional[CachedItem]:
-        """Build (downloading if needed) a CachedItem from a raw media record.
+    async def _ensure_cached(self, item_id: str, filename: str, cached: Path) -> bool:
+        """Make sure *cached* exists on disk, downloading it if needed.
 
-        The cache path is keyed by both item id and a sha256 prefix (from
-        meta.sha256, which the server recomputes on every content-changing
-        edit -- e.g. a permanent rotate/flip). A server-side edit therefore
-        changes the digest, which changes the cache path, so the file is
-        re-downloaded instead of silently serving the stale cached
-        orientation forever. Old per-sha256 cache dirs for a since-edited
-        item are simply left behind (harmless, never read again).
+        Called from CachedItem.load(), i.e. only for photos about to be shown,
+        so downloads are throttled by the slideshow's pre-load queue rather
+        than racing through the whole library.
         """
-        item_id = raw.get("id", "")
-        filename = raw.get("filename", "unknown")
-        meta = raw.get("meta") or {}
-        digest = meta.get("sha256") or ""
-        cache_key = digest[:12] if digest else "nosha"
-        cached = self._cache_dir / item_id / cache_key / filename
         if cached.is_file():
             # Cache hit: bump mtime so this file counts as recently used and
             # survives LRU eviction while it is still in rotation.
@@ -294,12 +299,40 @@ class ServerProducer:
                 os.utime(cached, None)
             except OSError:
                 pass
-        else:
-            ok = await self._download(item_id, filename, cached)
-            if not ok:
-                return None
-            self._note_cached(cached)
-            self._enforce_cache_limit(keep=cached)
+            return True
+        if not await self._download(item_id, filename, cached):
+            return False
+        self._note_cached(cached)
+        self._enforce_cache_limit(keep=cached)
+        return True
+
+    async def _item_from_raw(self, raw: dict) -> Optional[CachedItem]:
+        """Build a CachedItem from a raw media record, WITHOUT downloading.
+
+        The file is fetched lazily in CachedItem.load(). Downloading here
+        instead would pull the whole library onto the Pi before a single photo
+        is shown, because the producer is drained end-to-end each cycle (to
+        shuffle it) -- that is what filled the Pi's card and blacked out the
+        frame.
+
+        The cache path is keyed by both item id and a sha256 prefix (from
+        meta.sha256, which the server recomputes on every content-changing
+        edit -- e.g. a permanent rotate/flip). A server-side edit therefore
+        changes the digest, which changes the cache path, so the file is
+        re-downloaded instead of silently serving the stale cached
+        orientation forever.
+        """
+        item_id = raw.get("id", "")
+        filename = raw.get("filename", "unknown")
+        meta = raw.get("meta") or {}
+        digest = meta.get("sha256") or ""
+        cache_key = digest[:12] if digest else "nosha"
+        cached = self._cache_dir / item_id / cache_key / filename
+
+        async def fetch() -> bool:
+            """Ensure the file is on disk; called from CachedItem.load()."""
+            return await self._ensure_cached(item_id, filename, cached)
+
         # effective_taken_at/effective_lat/effective_lon (computed server-side
         # from MediaMetadata) prefer a manual override over raw EXIF, so a
         # manually-dated/-located photo shows the right caption on the frame
@@ -314,6 +347,7 @@ class ServerProducer:
         return CachedItem(
             cached,
             item_id,
+            fetch=fetch,
             taken_at=taken_at,
             lat=meta.get("effective_lat"),
             lon=meta.get("effective_lon"),

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from malmberg_display.display.proto import LoadContext
 from malmberg_display.slideshow.producers.server import ServerProducer
 from malmberg_server.api.routes import build_app as build_server_app
 from malmberg_server.app.config import ServerConfig
@@ -50,8 +51,15 @@ async def test_upload_and_producer_fetch(tmp_path: Path) -> None:
         producer = ServerProducer("http://server", cache, sc)
         items = [item async for item in producer.items()]
 
-    assert len(items) == 1
-    assert items[0].item_id == item_id
+        assert len(items) == 1
+        assert items[0].item_id == item_id
+        # Enumeration must NOT download -- the producer is drained end-to-end
+        # each cycle, so fetching here would pull the whole library onto the
+        # Pi before showing a single photo. The fetch happens in load().
+        assert not (cache / item_id / sha_prefix / "red.png").exists()
+
+        await items[0].load(LoadContext(cache_dir=cache))
+
     # Cache path is keyed by item id AND a content-digest prefix -- see
     # ServerProducer._item_from_raw -- so a server-side edit that changes
     # the digest lands at a new path and gets re-downloaded.
