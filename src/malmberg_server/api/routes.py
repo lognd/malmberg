@@ -43,7 +43,12 @@ from malmberg_server.faces.faces_index import FaceStore
 from malmberg_server.faces.people import PersonStore
 from malmberg_server.faces.worker import run_face_worker, sync_person_ids
 from malmberg_server.ingest.errors import IngestError
-from malmberg_server.ingest.media import extract_exif, make_thumbnail, transform_image
+from malmberg_server.ingest.media import (
+    extract_exif,
+    make_thumbnail,
+    reverse_geocode,
+    transform_image,
+)
 from malmberg_server.ingest.playlists import PlaylistStore
 from malmberg_server.ingest.store import MediaStore
 from malmberg_server.ingest.upload import handle_upload
@@ -145,6 +150,35 @@ class MediaPatch(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class MediaTagRequest(BaseModel):
+    """Request body for POST /media/{item_id}/tag: manual date/location.
+
+    Every field is optional and independent. A field that is OMITTED from
+    the request body is left unchanged; a field explicitly set to null
+    CLEARS that manual override, reverting to the photo's own EXIF value
+    (see MediaMetadata.effective_taken_at / effective_place). Omitted vs.
+    explicit-null is distinguished via ``model_fields_set`` -- a plain
+    Optional field cannot tell the two apart on its own.
+
+    *date* is an ISO date (``YYYY-MM-DD``) or full ISO datetime string,
+    stored as a UTC datetime. *place* is a free-text label. *lat*/*lon* are
+    decimal degrees; when given without *place*, the coordinates are
+    reverse-geocoded (best-effort, offline) into a place label.
+    """
+
+    date: Optional[str] = None
+    place: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+class MediaTagBulkRequest(MediaTagRequest):
+    """Request body for POST /media/tag-bulk: apply the same manual
+    date/location to every id in *ids* in one call."""
+
+    ids: list[str]
+
+
 class MediaTransformRequest(BaseModel):
     """Request body for POST /media/{item_id}/transform.
 
@@ -170,6 +204,56 @@ _INGEST_ERRORS = {
 def _raise_ingest(err: IngestError) -> None:
     status, detail = _INGEST_ERRORS.get(err, (500, str(err)))
     raise HTTPException(status_code=status, detail=detail)
+
+
+def _parse_manual_date(raw: str) -> datetime:
+    """Parse *raw* (``YYYY-MM-DD`` or full ISO datetime) into a UTC datetime.
+
+    Raises HTTPException(400) on an unparseable string. A date-only string
+    is taken as midnight UTC; a naive datetime is assumed UTC; an aware
+    datetime is converted to UTC -- matching how EXIF-derived taken_at is
+    always stored (see malmberg_server.ingest.media.extract_exif).
+    """
+    try:
+        if len(raw) == 10:
+            dt = datetime.strptime(raw, "%Y-%m-%d")
+        else:
+            dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {raw!r}") from exc
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _manual_meta_updates(meta, body: MediaTagRequest, fields_set: set) -> dict:
+    """Build a ``meta`` field-update dict from a manual-tag request.
+
+    Only fields present in *fields_set* (i.e. actually sent by the client)
+    are touched, so a partial request (date only, or place only) leaves the
+    other manual overrides untouched. Coordinates given without an explicit
+    *place* are reverse-geocoded into ``manual_place``; an explicit *place*
+    always wins over any derived label. Clearing (a field explicitly sent
+    as null) reverts that override to the EXIF value via
+    MediaMetadata.effective_* -- see the model docstrings.
+    """
+    updates: dict = {}
+    if "date" in fields_set:
+        updates["manual_taken_at"] = (
+            _parse_manual_date(body.date) if body.date is not None else None
+        )
+    if "lat" in fields_set or "lon" in fields_set:
+        updates["manual_lat"] = body.lat
+        updates["manual_lon"] = body.lon
+        if body.lat is not None and body.lon is not None:
+            derived = reverse_geocode(body.lat, body.lon)
+            if derived is not None:
+                updates["manual_place"] = derived
+        else:
+            updates.setdefault("manual_place", None)
+    if "place" in fields_set:
+        updates["manual_place"] = body.place
+    return updates
 
 
 def build_app(
@@ -666,6 +750,55 @@ def build_app(
             _log.error("Failed to persist media index after patch")
         return result.danger_ok.model_dump()
 
+    @app.post("/media/{item_id}/tag")
+    async def tag_media(item_id: str, body: MediaTagRequest) -> dict:
+        """Set/clear manual date and location overrides for a single item.
+
+        See MediaTagRequest for the omitted-vs-null semantics. Persists the
+        index immediately, same as the other mutating routes.
+        """
+        item = _store.get(item_id, media_root=_media_root())
+        if item is None:
+            raise HTTPException(status_code=404, detail="Media item not found")
+        meta_updates = _manual_meta_updates(item.meta, body, body.model_fields_set)
+        new_meta = item.meta.model_copy(update=meta_updates)
+        result = _store.patch(item_id, {"meta": new_meta})
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after tag")
+        _log.info("Tagged %s: %s", item_id, meta_updates)
+        return result.danger_ok.model_dump(mode="json")
+
+    @app.post("/media/tag-bulk")
+    async def tag_media_bulk(body: MediaTagBulkRequest) -> dict:
+        """Apply the same manual date/location to every id in *body.ids*.
+
+        Returns {"tagged": [ids...], "failed": [ids...]}; a failure on one
+        item does not abort the rest.
+        """
+        fields_set = body.model_fields_set - {"ids"}
+        tagged: list[str] = []
+        failed: list[str] = []
+        for item_id in body.ids:
+            item = _store.get(item_id, media_root=_media_root())
+            if item is None:
+                failed.append(item_id)
+                continue
+            meta_updates = _manual_meta_updates(item.meta, body, fields_set)
+            new_meta = item.meta.model_copy(update=meta_updates)
+            result = _store.patch(item_id, {"meta": new_meta})
+            if result.is_err:
+                failed.append(item_id)
+                continue
+            tagged.append(item_id)
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after bulk tag")
+        _log.info("Bulk tagged %d item(s), %d failed", len(tagged), len(failed))
+        return {"tagged": tagged, "failed": failed}
+
     @app.post("/media/{item_id}/transform")
     async def transform_media(item_id: str, body: MediaTransformRequest) -> dict:
         """Permanently rotate/flip an image, baking the change into the file.
@@ -703,7 +836,13 @@ def build_app(
         if meta_result.is_err:
             _raise_ingest(meta_result.danger_err)
         new_meta = meta_result.danger_ok.model_copy(
-            update={"ingest_at": item.meta.ingest_at}
+            update={
+                "ingest_at": item.meta.ingest_at,
+                "manual_taken_at": item.meta.manual_taken_at,
+                "manual_lat": item.meta.manual_lat,
+                "manual_lon": item.meta.manual_lon,
+                "manual_place": item.meta.manual_place,
+            }
         )
         patched = _store.patch(item_id, {"meta": new_meta})
         if patched.is_err:

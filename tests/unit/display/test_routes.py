@@ -117,6 +117,44 @@ def test_proxy_places_503_when_unpaired() -> None:
     assert _client().get("/places").status_code == 503
 
 
+def test_proxy_tag_media_forwards_to_server() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.content
+        return httpx.Response(200, json={"id": "abc", "meta": {}})
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.post("/media/abc/tag", json={"date": "2006-07-04"})
+    assert r.status_code == 200
+    assert seen["url"] == "http://server.local:8444/media/abc/tag"
+    assert b"2006-07-04" in seen["body"]
+
+
+def test_proxy_tag_media_bulk_forwards_to_server() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"tagged": ["a", "b"], "failed": []})
+
+    client = _mock_transport(handler)
+    c = _client(server_url="http://server.local:8444", http_client=client)
+    r = c.post("/media/tag-bulk", json={"ids": ["a", "b"], "place": "Reunion"})
+    assert r.status_code == 200
+    assert r.json() == {"tagged": ["a", "b"], "failed": []}
+    assert seen["url"] == "http://server.local:8444/media/tag-bulk"
+
+
+def test_proxy_tag_media_503_when_unpaired() -> None:
+    assert (
+        _client().post("/media/abc/tag", json={"date": "2020-01-01"}).status_code == 503
+    )
+    assert _client().post("/media/tag-bulk", json={"ids": []}).status_code == 503
+
+
 def test_proxy_people_forwards_to_server() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/people"

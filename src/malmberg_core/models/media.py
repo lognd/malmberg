@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 HidePolicy = Literal["delete", "keep"]
 
@@ -39,6 +39,57 @@ class MediaMetadata(BaseModel):
     malmberg_server.ingest.media.META_SCHEMA_VERSION on read to decide
     whether the metadata should be transparently re-extracted.
     """
+    manual_taken_at: Optional[datetime] = None
+    """User-entered date/time override, set via POST /media/{id}/tag or
+    /media/tag-bulk. Wins over ``taken_at`` (see ``effective_taken_at``) --
+    this lets the user manually date photos with no EXIF DateTimeOriginal
+    (old scans, cameras without a clock). Defaults to None so existing
+    on-disk index rows load unchanged. MediaStore._refresh_if_stale and the
+    /media/{id}/transform endpoint MUST preserve this field when they
+    re-extract EXIF from the file, or a manual tag would be silently lost
+    on the next schema bump or rotate."""
+    manual_lat: Optional[float] = None
+    """User-entered latitude override; see ``manual_taken_at`` for the
+    preservation contract. Set together with ``manual_lon``."""
+    manual_lon: Optional[float] = None
+    """User-entered longitude override; see ``manual_lat``."""
+    manual_place: Optional[str] = None
+    """User-entered (or coordinate-derived) place label override. Wins over
+    ``place`` (see ``effective_place``). Set directly from free text, or
+    derived from ``manual_lat``/``manual_lon`` via
+    malmberg_server.ingest.media.reverse_geocode when only coordinates are
+    given."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_taken_at(self) -> Optional[datetime]:
+        """``manual_taken_at`` if set, else the EXIF-derived ``taken_at``.
+
+        Every consumer that needs "the" date of a photo (search, stats,
+        display captions) must read this instead of ``taken_at`` directly,
+        so a manually-dated photo behaves identically to one with real EXIF.
+        """
+        if self.manual_taken_at is not None:
+            return self.manual_taken_at
+        return self.taken_at
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_lat(self) -> Optional[float]:
+        """``manual_lat`` if set, else the EXIF-derived ``lat``."""
+        return self.manual_lat if self.manual_lat is not None else self.lat
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_lon(self) -> Optional[float]:
+        """``manual_lon`` if set, else the EXIF-derived ``lon``."""
+        return self.manual_lon if self.manual_lon is not None else self.lon
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def effective_place(self) -> Optional[str]:
+        """``manual_place`` if set, else the reverse-geocoded ``place``."""
+        return self.manual_place if self.manual_place is not None else self.place
 
 
 class MediaItem(BaseModel):

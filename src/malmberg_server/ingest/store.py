@@ -256,7 +256,8 @@ class MediaStore:
             ]
         if sort == "recent":
             all_items.sort(
-                key=lambda it: it.meta.taken_at or it.meta.ingest_at, reverse=True
+                key=lambda it: it.meta.effective_taken_at or it.meta.ingest_at,
+                reverse=True,
             )
         total = len(all_items)
         start = (page - 1) * page_size
@@ -300,8 +301,12 @@ class MediaStore:
         """Re-extract *item*'s metadata if its schema_version is out of date.
 
         Preserves user-set fields (do_not_display, hide_policy, tags,
-        dwell_override_s) and the original ingest_at timestamp. Re-extraction
-        failures or a missing source file leave the item unchanged.
+        dwell_override_s), the original ingest_at timestamp, and the manual
+        date/location overrides (manual_taken_at, manual_lat, manual_lon,
+        manual_place) -- these live only in the index, never in the file, so
+        a naive re-extract would silently wipe any manually-tagged photo.
+        Re-extraction failures or a missing source file leave the item
+        unchanged.
         """
         if item.meta.schema_version >= META_SCHEMA_VERSION:
             return item
@@ -322,7 +327,13 @@ class MediaStore:
             )
             return item
         new_meta = result.danger_ok.model_copy(
-            update={"ingest_at": item.meta.ingest_at}
+            update={
+                "ingest_at": item.meta.ingest_at,
+                "manual_taken_at": item.meta.manual_taken_at,
+                "manual_lat": item.meta.manual_lat,
+                "manual_lon": item.meta.manual_lon,
+                "manual_place": item.meta.manual_place,
+            }
         )
         refreshed = item.model_copy(update={"meta": new_meta})
         self._items[item.id] = refreshed
@@ -390,7 +401,11 @@ class MediaStore:
         ]
         images = sum(1 for it in items if it.kind == "image")
         videos = sum(1 for it in items if it.kind == "video")
-        dated = [it.meta.taken_at for it in items if it.meta.taken_at is not None]
+        dated = [
+            it.meta.effective_taken_at
+            for it in items
+            if it.meta.effective_taken_at is not None
+        ]
         undated = len(items) - len(dated)
         by_year: dict[str, int] = {}
         by_month: dict[str, int] = {}
@@ -401,8 +416,10 @@ class MediaStore:
             by_month[month] = by_month.get(month, 0) + 1
         by_place: dict[str, int] = {}
         for it in items:
-            if it.meta.place:
-                by_place[it.meta.place] = by_place.get(it.meta.place, 0) + 1
+            if it.meta.effective_place:
+                by_place[it.meta.effective_place] = (
+                    by_place.get(it.meta.effective_place, 0) + 1
+                )
         result = {
             "total": len(items),
             "images": images,
@@ -453,11 +470,12 @@ class MediaStore:
         needle = q.strip().lower()
         if needle in item.filename.lower():
             return True
+        taken_at = item.meta.effective_taken_at
         if (
             len(needle) == 4
             and needle.isdigit()
-            and item.meta.taken_at is not None
-            and str(item.meta.taken_at.year) == needle
+            and taken_at is not None
+            and str(taken_at.year) == needle
         ):
             return True
         if (
@@ -465,12 +483,13 @@ class MediaStore:
             and needle[4] == "-"
             and needle[:4].isdigit()
             and needle[5:].isdigit()
-            and item.meta.taken_at is not None
+            and taken_at is not None
         ):
-            ym = f"{item.meta.taken_at.year:04d}-{item.meta.taken_at.month:02d}"
+            ym = f"{taken_at.year:04d}-{taken_at.month:02d}"
             if ym == needle:
                 return True
-        if item.meta.place is not None and needle in item.meta.place.lower():
+        place = item.meta.effective_place
+        if place is not None and needle in place.lower():
             return True
         if people is not None and item.person_ids:
             for pid in item.person_ids:
@@ -481,19 +500,21 @@ class MediaStore:
 
     @staticmethod
     def _matches_time(item: MediaItem, q_time: str) -> bool:
-        """Return True if ``meta.taken_at`` matches a 4-digit year or ``YYYY-MM``."""
+        """Return True if ``meta.effective_taken_at`` matches a 4-digit year
+        or ``YYYY-MM``."""
         needle = q_time.strip().lower()
-        if item.meta.taken_at is None:
+        taken_at = item.meta.effective_taken_at
+        if taken_at is None:
             return False
         if len(needle) == 4 and needle.isdigit():
-            return str(item.meta.taken_at.year) == needle
+            return str(taken_at.year) == needle
         if (
             len(needle) == 7
             and needle[4] == "-"
             and needle[:4].isdigit()
             and needle[5:].isdigit()
         ):
-            ym = f"{item.meta.taken_at.year:04d}-{item.meta.taken_at.month:02d}"
+            ym = f"{taken_at.year:04d}-{taken_at.month:02d}"
             return ym == needle
         return False
 
@@ -516,7 +537,8 @@ class MediaStore:
             return False
         if q_place:
             needle = q_place.strip().lower()
-            if item.meta.place is None or needle not in item.meta.place.lower():
+            place = item.meta.effective_place
+            if place is None or needle not in place.lower():
                 return False
         if q_person:
             needle = q_person.strip().lower()

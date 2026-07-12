@@ -373,6 +373,18 @@ def build_app(
         """Proxy: fetch full MediaItem JSON (details modal) from the paired server."""
         return await _proxy_json("GET", f"/media/{item_id}/info")
 
+    @app.post("/media/{item_id}/tag")
+    async def proxy_tag_media(item_id: str, request: Request) -> object:
+        """Proxy: set/clear a manual date and location override for one item."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/media/{item_id}/tag", json=body)
+
+    @app.post("/media/tag-bulk")
+    async def proxy_tag_media_bulk(request: Request) -> object:
+        """Proxy: apply the same manual date/location to many items at once."""
+        body = await request.json()
+        return await _proxy_json("POST", "/media/tag-bulk", json=body)
+
     @app.get("/stats")
     async def proxy_stats() -> object:
         """Proxy: library-wide stats (counts, date range, by-year) from the server."""

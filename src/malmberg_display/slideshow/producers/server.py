@@ -187,8 +187,13 @@ class ServerProducer:
             ok = await self._download(item_id, filename, cached)
             if not ok:
                 return None
+        # effective_taken_at/effective_lat/effective_lon (computed server-side
+        # from MediaMetadata) prefer a manual override over raw EXIF, so a
+        # manually-dated/-located photo shows the right caption on the frame
+        # with no display-side changes needed beyond reading these fields
+        # instead of the raw taken_at/lat/lon.
         taken_at: Optional[datetime] = None
-        if ts := meta.get("taken_at"):
+        if ts := meta.get("effective_taken_at"):
             try:
                 taken_at = datetime.fromisoformat(ts)
             except ValueError:
@@ -197,8 +202,8 @@ class ServerProducer:
             cached,
             item_id,
             taken_at=taken_at,
-            lat=meta.get("lat"),
-            lon=meta.get("lon"),
+            lat=meta.get("effective_lat"),
+            lon=meta.get("effective_lon"),
             camera_model=meta.get("camera_model"),
             dwell_override_s=raw.get("dwell_override_s"),
         )

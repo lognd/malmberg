@@ -1240,6 +1240,31 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     border-color: var(--aqua);
     color: var(--aqua);
   }
+  #bulk-set-tag {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  #bulk-tag-picker {
+    display: none;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+    padding: 0.85rem 0.9rem;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: var(--bg-alt);
+  }
+  #bulk-tag-picker.show { display: flex; }
+  #bulk-tag-picker input { min-height: 44px; }
+  #bulk-tag-save-btn {
+    min-height: 46px;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    background: var(--panel);
+    cursor: pointer;
+  }
   #bulk-danger-group {
     display: flex;
     flex-wrap: wrap;
@@ -1488,6 +1513,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     opacity: 0.6;
   }
   #act-hard-delete:hover { color: var(--err); opacity: 1; }
+  #tag-source-note {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-bottom: 0.2rem;
+  }
+  #tag-source-note.manual { color: var(--accent); font-weight: 700; }
+  #tag-actions input {
+    min-height: 44px;
+  }
+  #tag-save-btn { color: var(--accent); border-color: var(--accent); }
   /* Playlist picker (inline, inside modal or bulk bar) */
   #playlist-picker {
     display: none;
@@ -1808,6 +1843,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <div id="bulk-bar-actions">
           <button id="bulk-select-all" type="button">Select all on page</button>
           <button id="bulk-add-playlist" type="button">Add to slideshow</button>
+          <button id="bulk-set-tag" type="button">Set date &amp; place</button>
           <button id="bulk-clear" type="button">Clear selection</button>
           <div id="bulk-danger-group">
             <button id="bulk-soft-delete" type="button">Delete (recoverable)</button>
@@ -1816,6 +1852,25 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         </div>
       </div>
       <div id="bulk-playlist-picker"></div>
+      <div id="bulk-tag-picker">
+        <div class="yf-label">
+          Set the same date &amp; place on all selected photos (e.g. a batch
+          of scans from one event)
+        </div>
+        <input id="bulk-tag-date-input" type="text" autocomplete="off"
+          placeholder="Date, e.g. 2006-07-04">
+        <input id="bulk-tag-place-input" type="text" autocomplete="off"
+          list="bulk-tag-place-suggestions"
+          placeholder="Place, e.g. Grandma's house, Tampa">
+        <datalist id="bulk-tag-place-suggestions"></datalist>
+        <input id="bulk-tag-lat-input" type="text" autocomplete="off"
+          placeholder="Latitude (optional)">
+        <input id="bulk-tag-lon-input" type="text" autocomplete="off"
+          placeholder="Longitude (optional)">
+        <button id="bulk-tag-save-btn" type="button">
+          Save to all selected photos
+        </button>
+      </div>
       <div class="grid" id="grid"></div>
       <div class="pagination">
         <button id="page-prev" type="button">Previous</button>
@@ -1875,6 +1930,25 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     <div id="modal-body">
       <div id="modal-title"></div>
       <dl class="detail-grid" id="modal-details"></dl>
+      <div class="modal-actions" id="tag-actions">
+        <div class="yf-label">Fix the date or place (for old photos with no
+          date/location on them)</div>
+        <div id="tag-source-note"></div>
+        <input id="tag-date-input" type="text" autocomplete="off"
+          placeholder="Date, e.g. 2006-07-04">
+        <input id="tag-place-input" type="text" autocomplete="off"
+          list="tag-place-suggestions"
+          placeholder="Place, e.g. Grandma's house, Tampa">
+        <datalist id="tag-place-suggestions"></datalist>
+        <input id="tag-lat-input" type="text" autocomplete="off"
+          placeholder="Latitude (optional)">
+        <input id="tag-lon-input" type="text" autocomplete="off"
+          placeholder="Longitude (optional)">
+        <button id="tag-save-btn" type="button">Save date &amp; place</button>
+        <button id="tag-clear-btn" type="button">
+          Clear (use the photo's own date &amp; place)
+        </button>
+      </div>
       <div class="modal-actions" id="orient-actions">
         <div class="orient-grid">
           <button id="act-rotate-left" type="button" aria-label="Rotate left">
@@ -3425,6 +3499,85 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .catch(function () { showToast("Bulk delete failed.", "err"); });
   });
 
+  /* ---- Bulk date & place tagging ---- */
+  var bulkSetTag = document.getElementById("bulk-set-tag");
+  var bulkTagPicker = document.getElementById("bulk-tag-picker");
+  var bulkTagDateInput = document.getElementById("bulk-tag-date-input");
+  var bulkTagPlaceInput = document.getElementById("bulk-tag-place-input");
+  var bulkTagPlaceSuggestions = document.getElementById(
+    "bulk-tag-place-suggestions"
+  );
+  var bulkTagLatInput = document.getElementById("bulk-tag-lat-input");
+  var bulkTagLonInput = document.getElementById("bulk-tag-lon-input");
+  var bulkTagSaveBtn = document.getElementById("bulk-tag-save-btn");
+  var bulkTagPlaceDebounce = null;
+
+  bulkTagPlaceInput.addEventListener("input", function () {
+    if (bulkTagPlaceDebounce) window.clearTimeout(bulkTagPlaceDebounce);
+    bulkTagPlaceDebounce = window.setTimeout(function () {
+      loadPlaceSuggestions(bulkTagPlaceInput.value.trim(), bulkTagPlaceSuggestions);
+    }, 350);
+  });
+
+  bulkSetTag.addEventListener("click", function () {
+    if (selectedIds().length === 0) {
+      showToast("Select one or more photos first.", "err");
+      return;
+    }
+    bulkTagPicker.className = bulkTagPicker.className === "show" ? "" : "show";
+  });
+
+  bulkTagSaveBtn.addEventListener("click", function () {
+    var ids = selectedIds();
+    if (ids.length === 0) {
+      showToast("Select one or more photos first.", "err");
+      return;
+    }
+    var dateVal = bulkTagDateInput.value.trim();
+    var placeVal = bulkTagPlaceInput.value.trim();
+    var latVal = bulkTagLatInput.value.trim();
+    var lonVal = bulkTagLonInput.value.trim();
+    if ((latVal && !lonVal) || (!latVal && lonVal)) {
+      showToast("Enter both latitude and longitude, or leave both blank.", "err");
+      return;
+    }
+    var body = { ids: ids };
+    if (dateVal) body.date = dateVal;
+    if (placeVal) body.place = placeVal;
+    if (latVal && lonVal) {
+      body.lat = parseFloat(latVal);
+      body.lon = parseFloat(lonVal);
+    }
+    if (!dateVal && !placeVal && !(latVal && lonVal)) {
+      showToast("Enter a date or a place first.", "err");
+      return;
+    }
+    bulkTagSaveBtn.disabled = true;
+    fetch("/media/tag-bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        showToast(
+          "Set date/place on " + (data.tagged || []).length + " photo(s).", "ok"
+        );
+        bulkTagPicker.className = "";
+        bulkTagDateInput.value = "";
+        bulkTagPlaceInput.value = "";
+        bulkTagLatInput.value = "";
+        bulkTagLonInput.value = "";
+        bulkTagSaveBtn.disabled = false;
+        loadStats();
+        loadGrid();
+      })
+      .catch(function () {
+        showToast("Could not set date/place.", "err");
+        bulkTagSaveBtn.disabled = false;
+      });
+  });
+
   /* ---- Remembered slideshow target ----
      Like "Add to playlist" on a music app: once the user picks a
      slideshow, later "Add to slideshow" taps go straight there without
@@ -3757,6 +3910,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var actSoftDelete = document.getElementById("act-soft-delete");
   var actHardDelete = document.getElementById("act-hard-delete");
   var modalPlaylistPicker = document.getElementById("playlist-picker");
+  var tagSourceNote = document.getElementById("tag-source-note");
+  var tagDateInput = document.getElementById("tag-date-input");
+  var tagPlaceInput = document.getElementById("tag-place-input");
+  var tagPlaceSuggestions = document.getElementById("tag-place-suggestions");
+  var tagLatInput = document.getElementById("tag-lat-input");
+  var tagLonInput = document.getElementById("tag-lon-input");
+  var tagSaveBtn = document.getElementById("tag-save-btn");
+  var tagClearBtn = document.getElementById("tag-clear-btn");
   var orientActions = document.getElementById("orient-actions");
   var actRotateLeft = document.getElementById("act-rotate-left");
   var actRotateRight = document.getElementById("act-rotate-right");
@@ -3784,6 +3945,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       });
     } catch (e) {
       return iso;
+    }
+  }
+
+  function toDateInputValue(iso) {
+    if (!iso) return "";
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return "";
+      var mm = String(d.getMonth() + 1).padStart(2, "0");
+      var dd = String(d.getDate()).padStart(2, "0");
+      return d.getFullYear() + "-" + mm + "-" + dd;
+    } catch (e) {
+      return "";
     }
   }
 
@@ -3839,9 +4013,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         modalDetails.innerHTML = "";
         addDetail("Kind", item.kind);
         var meta = item.meta || {};
+        var effDate = meta.effective_taken_at;
         addDetail(
           "Date taken",
-          meta.taken_at ? fmtDate(meta.taken_at) : "Unknown"
+          effDate ? fmtDate(effDate) + (meta.manual_taken_at ? " (manual)" : "")
+            : "Unknown"
         );
         addDetail("Camera", meta.camera_model || "Unknown");
         if (meta.width && meta.height) {
@@ -3850,14 +4026,22 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         if (item.kind === "video" && meta.duration_s) {
           addDetail("Duration", Math.round(meta.duration_s) + " s");
         }
-        if (meta.lat != null && meta.lon != null) {
-          var url = "https://www.openstreetmap.org/?mlat=" + meta.lat
-            + "&mlon=" + meta.lon;
+        var effLat = meta.effective_lat;
+        var effLon = meta.effective_lon;
+        if (effLat != null && effLon != null) {
+          var url = "https://www.openstreetmap.org/?mlat=" + effLat
+            + "&mlon=" + effLon;
           addDetailHtml(
             "Location",
-            meta.lat.toFixed(5) + ", " + meta.lon.toFixed(5)
+            effLat.toFixed(5) + ", " + effLon.toFixed(5)
+            + (meta.manual_lat != null ? " (manual)" : "")
             + ' (<a href="' + url + '" target="_blank" '
             + 'rel="noopener">view on map</a>)'
+          );
+        } else if (meta.effective_place) {
+          addDetail(
+            "Location",
+            meta.effective_place + (meta.manual_place ? " (manual)" : "")
           );
         } else {
           addDetail("Location", "Unknown");
@@ -3865,6 +4049,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         addDetail("Server path", item.server_path);
         addDetail("SHA-256", meta.sha256 || "Unknown");
         addDetail("Ingested", fmtDate(meta.ingest_at) || "Unknown");
+
+        var isManual = !!(meta.manual_taken_at || meta.manual_place
+          || meta.manual_lat != null);
+        tagSourceNote.textContent = isManual
+          ? "This photo's date/place were set by hand."
+          : "This photo's date/place come from the camera (or are unknown).";
+        tagSourceNote.className = isManual ? "manual" : "";
+        tagDateInput.value = meta.manual_taken_at
+          ? toDateInputValue(meta.manual_taken_at)
+          : "";
+        tagPlaceInput.value = meta.manual_place || "";
+        tagLatInput.value = meta.manual_lat != null ? String(meta.manual_lat) : "";
+        tagLonInput.value = meta.manual_lon != null ? String(meta.manual_lon) : "";
       })
       .catch(function () {
         modalTitle.textContent = "Could not load details.";
@@ -3934,6 +4131,80 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     renderPlaylistPicker(modalPlaylistPicker, function (name) {
       actAddToPlaylist(name, itemId, filename);
     });
+  });
+
+  var tagPlaceDebounce = null;
+  tagPlaceInput.addEventListener("input", function () {
+    if (tagPlaceDebounce) window.clearTimeout(tagPlaceDebounce);
+    tagPlaceDebounce = window.setTimeout(function () {
+      loadPlaceSuggestions(tagPlaceInput.value.trim(), tagPlaceSuggestions);
+    }, 350);
+  });
+
+  function saveManualTag(itemId, body) {
+    return fetch("/media/" + itemId + "/tag", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      if (!r.ok) throw new Error("tag save failed");
+      return r.json();
+    });
+  }
+
+  tagSaveBtn.addEventListener("click", function () {
+    if (!modalItem) return;
+    var dateVal = tagDateInput.value.trim();
+    var placeVal = tagPlaceInput.value.trim();
+    var latVal = tagLatInput.value.trim();
+    var lonVal = tagLonInput.value.trim();
+    if ((latVal && !lonVal) || (!latVal && lonVal)) {
+      showToast("Enter both latitude and longitude, or leave both blank.", "err");
+      return;
+    }
+    var body = {};
+    if (dateVal) body.date = dateVal;
+    if (placeVal) body.place = placeVal;
+    if (latVal && lonVal) {
+      body.lat = parseFloat(latVal);
+      body.lon = parseFloat(lonVal);
+    }
+    if (Object.keys(body).length === 0) {
+      showToast("Enter a date or a place first.", "err");
+      return;
+    }
+    tagSaveBtn.disabled = true;
+    saveManualTag(modalItem.id, body)
+      .then(function (updated) {
+        modalItem = updated;
+        showToast("Date and place saved.", "ok");
+        tagSaveBtn.disabled = false;
+        openModal(updated.id);
+        loadGrid();
+        loadStats();
+      })
+      .catch(function () {
+        showToast("Could not save the date/place.", "err");
+        tagSaveBtn.disabled = false;
+      });
+  });
+
+  tagClearBtn.addEventListener("click", function () {
+    if (!modalItem) return;
+    tagClearBtn.disabled = true;
+    saveManualTag(modalItem.id, { date: null, place: null, lat: null, lon: null })
+      .then(function (updated) {
+        modalItem = updated;
+        showToast("Cleared -- back to the photo's own date/place.", "ok");
+        tagClearBtn.disabled = false;
+        openModal(updated.id);
+        loadGrid();
+        loadStats();
+      })
+      .catch(function () {
+        showToast("Could not clear the date/place.", "err");
+        tagClearBtn.disabled = false;
+      });
   });
 
   function setOrientButtonsDisabled(disabled) {

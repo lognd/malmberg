@@ -402,6 +402,60 @@ changed.
 
 ---
 
+### `POST /media/{id}/tag`
+
+Set or clear a manual date/location override on a single item -- for old
+scans and camera-less photos that have no EXIF `DateTimeOriginal` or GPS and
+would otherwise never show up in the year/month time filters or place
+search/stats.
+
+**Request body: `MediaTagRequest`** -- every field is optional and
+independent. A field **omitted** from the body is left unchanged. A field
+**explicitly sent as `null`** clears that manual override, reverting to the
+photo's own EXIF value.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `date` | string \| null | ISO date (`YYYY-MM-DD`) or full ISO datetime. Stored as `meta.manual_taken_at` (UTC). |
+| `place` | string \| null | Free-text place label, e.g. `"Grandma's house, Tampa"`. Stored as `meta.manual_place`. |
+| `lat` | float \| null | Latitude. Stored as `meta.manual_lat`. |
+| `lon` | float \| null | Longitude. Stored as `meta.manual_lon`. |
+
+If `lat`/`lon` are given without an explicit `place`, they are reverse
+-geocoded (best-effort, offline, same `reverse_geocode()` used at ingest)
+into `meta.manual_place`. An explicit `place` always wins over a derived
+one, even when coordinates are also given.
+
+**Response:** the updated `MediaItem`.
+
+**Errors:**
+- `400` -- `date` could not be parsed
+- `404` -- item not found
+
+---
+
+### `POST /media/tag-bulk`
+
+Apply the same manual date/location to many items in one call (e.g. an
+entire batch of scans from one event).
+
+**Request body: `MediaTagBulkRequest`** -- `MediaTagRequest`'s fields plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ids` | list[str] | Item ids to tag |
+
+**Response:**
+
+```json
+{"tagged": ["id1", "id2"], "failed": ["id3"]}
+```
+
+A failure on one id (not found, or an invalid `date`) does not abort the
+rest.
+
+---
+
 ### `POST /media/{id}/transform`
 
 Permanently rotate and/or flip an image, baking the change into the pixels
@@ -731,6 +785,34 @@ deleted per call. Every deletion is written to `fs_root/logs/cloud-deletions.log
 | `duration_s` | float \| null | Video duration in seconds; null for images |
 | `sha256` | str | SHA-256 hex digest of the original file |
 | `schema_version` | int | MediaMetadata schema version this record was extracted with (see "Lazy metadata refresh" below) |
+| `manual_taken_at` | ISO 8601 datetime \| null | User-entered date override, set via `POST /media/{id}/tag` or `/media/tag-bulk`; null unless set |
+| `manual_lat` | float \| null | User-entered latitude override; null unless set |
+| `manual_lon` | float \| null | User-entered longitude override; null unless set |
+| `manual_place` | str \| null | User-entered (or coordinate-derived) place label override; null unless set |
+| `effective_taken_at` | ISO 8601 datetime \| null | **Computed, read-only.** `manual_taken_at` if set, else `taken_at`. Every consumer that needs "the" date of a photo (search, stats, display captions) reads this. |
+| `effective_lat` | float \| null | **Computed, read-only.** `manual_lat` if set, else `lat`. |
+| `effective_lon` | float \| null | **Computed, read-only.** `manual_lon` if set, else `lon`. |
+| `effective_place` | str \| null | **Computed, read-only.** `manual_place` if set, else `place`. |
+
+#### Manual date/location overrides
+
+`manual_taken_at`/`manual_lat`/`manual_lon`/`manual_place` exist to let a
+user hand-date and hand-locate photos with no EXIF `DateTimeOriginal` and no
+GPS (old scans, cameras without a clock or GPS) -- see `POST /media/{id}/tag`
+and `POST /media/tag-bulk`. They are stored as **separate fields from** the
+EXIF-derived `taken_at`/`lat`/`lon`/`place`, specifically so that the lazy
+metadata refresh (below) and `POST /media/{id}/transform` -- both of which
+re-extract EXIF straight from the file and would otherwise overwrite those
+fields -- can never silently wipe a manual tag. Both preserve
+`manual_taken_at`/`manual_lat`/`manual_lon`/`manual_place` explicitly when
+they replace `meta`.
+
+Every place in the server that answers "what is this photo's date/place"
+(search by year/month/place, `GET /stats`'s `by_year`/`by_month`/`by_place`/
+`undated`, `GET /places` autocomplete, and the `meta` served in `GET /media`
+that feeds the paired display's on-screen caption) reads the `effective_*`
+computed fields, not the raw EXIF fields, so a manually-tagged photo behaves
+identically to one with real EXIF everywhere in the app.
 
 ---
 
@@ -742,11 +824,14 @@ freshly-extracted `MediaMetadata` with the current
 `META_SCHEMA_VERSION`. When `GET /media` or `GET /media/{id}` serves an item
 whose `meta.schema_version` is behind that constant, the server re-runs EXIF
 extraction on the file in place, replaces `meta` (preserving
-`do_not_display`, `hide_policy`, `tags`, `dwell_override_s`, and the original
-`meta.ingest_at`), and persists the updated index to
+`do_not_display`, `hide_policy`, `tags`, `dwell_override_s`, the original
+`meta.ingest_at`, and the manual override fields `manual_taken_at`/
+`manual_lat`/`manual_lon`/`manual_place`), and persists the updated index to
 `logs/media-index.jsonl`. If the source file is missing or extraction fails,
 the stale record is served unchanged and a warning is logged; the refresh is
-retried on the next read.
+retried on the next read. `POST /media/{id}/transform` re-extracts EXIF the
+same way after rewriting the file's pixels and preserves the same manual
+override fields for the same reason.
 
 To add a new metadata field: add it to `MediaMetadata`, populate it in
 `extract_exif`, and bump `META_SCHEMA_VERSION` by one. Existing items
@@ -990,6 +1075,8 @@ below responds `503`.
 | `DELETE /media/{id}` | `DELETE /media/{id}` (`?permanent=` passed through) |
 | `POST /media/{id}/restore` | `POST /media/{id}/restore` |
 | `POST /media/bulk-delete` | `POST /media/bulk-delete` |
+| `POST /media/{id}/tag` | `POST /media/{id}/tag` |
+| `POST /media/tag-bulk` | `POST /media/tag-bulk` |
 | `POST /control/restart-server` | `POST /admin/restart` (restarts the paired server itself) |
 | `GET /cloud/status` | `GET /cloud/status` (read-only cloud-sync diagnostics) |
 | `GET /cloud/deletable` | `GET /cloud/deletable` (query params passed through; read-only dry run) |
