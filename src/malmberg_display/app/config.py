@@ -32,14 +32,25 @@ class DisplayConfig(BaseModel):
     """Enable playwright-based web overlays (requires playwright_supported HAL flag)."""
     offline_cache_size: int = 500
     """Maximum number of items to keep in the offline LRU cache."""
-    cache_max_bytes: int = 4 * 1024 * 1024 * 1024
-    """Cap on the on-disk photo cache, in bytes (default 4 GiB).
+    cache_max_items: int = 48
+    """Cap on how many photos are kept on disk (default 48 -- a handful).
 
     The display keeps a copy of every photo it downloads.  Left unbounded this
     grows to the size of the whole library and fills the Pi's card, at which
-    point nothing can be downloaded and the frame goes dark.  Once the cache
-    exceeds this, least-recently-used files are evicted.  Set to 0 to disable
-    the cap (not advised on a Pi).
+    point nothing can be downloaded and the frame goes dark.
+
+    Kept deliberately tiny: the Pi runs off slow flash, so a large cache means
+    slow reads and a slow directory to walk.  The cache only needs the photos
+    around the current position -- the pre-load queue plus enough history for
+    "Previous" (history_len is 32).  A miss just re-downloads over the LAN,
+    which beats a slow flash read anyway.  Set to 0 for no item cap.
+    """
+    cache_max_bytes: int = 256 * 1024 * 1024
+    """Hard disk guard for the photo cache, in bytes (default 256 MiB).
+
+    Backstops ``cache_max_items``: a few large videos could blow past a
+    sensible item count, so evict on whichever cap is hit first.  Set to 0 to
+    disable the byte cap (not advised on a Pi).
     """
     width: int = 1920
     height: int = 1080

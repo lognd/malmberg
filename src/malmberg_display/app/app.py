@@ -121,6 +121,7 @@ class DisplayApp:
                         cache_dir,
                         client,
                         item_ids=item_ids,
+                        max_items=self._cfg.cache_max_items,
                         max_bytes=self._cfg.cache_max_bytes,
                     ).items()
 
@@ -274,10 +275,15 @@ class DisplayApp:
             assert self._http_client is not None
             client = self._http_client
             _log.info("Using server producer: %s", server_url)
+            max_items = self._cfg.cache_max_items
             max_bytes = self._cfg.cache_max_bytes
             return async_load_infinite(
                 lambda: ServerProducer(
-                    server_url, cache_dir, client, max_bytes=max_bytes
+                    server_url,
+                    cache_dir,
+                    client,
+                    max_items=max_items,
+                    max_bytes=max_bytes,
                 ).items()
             )
 
@@ -308,11 +314,16 @@ class DisplayApp:
             # since make_server_producer reads self._cfg.server_url and it was
             # never set here.
             self._cfg.server_url = server_url
-            cap = self._cfg.cache_max_bytes
+            cap_items = self._cfg.cache_max_items
+            cap_bytes = self._cfg.cache_max_bytes
             slideshow.set_producer(
                 async_load_infinite(
                     lambda: ServerProducer(
-                        server_url, cache_dir, client, max_bytes=cap
+                        server_url,
+                        cache_dir,
+                        client,
+                        max_items=cap_items,
+                        max_bytes=cap_bytes,
                     ).items()
                 )
             )

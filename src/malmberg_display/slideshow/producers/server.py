@@ -90,7 +90,8 @@ class ServerProducer:
         cache_dir: Path,
         http_client: httpx.AsyncClient,
         item_ids: Optional[Sequence[str]] = None,
-        max_bytes: int = 4 * 1024 * 1024 * 1024,
+        max_items: int = 48,
+        max_bytes: int = 256 * 1024 * 1024,
     ) -> None:
         self._url = server_url.rstrip("/")
         self._cache_dir = cache_dir
@@ -98,21 +99,20 @@ class ServerProducer:
         # When set, play only these item ids in this order (a programmed
         # slideshow or a single "display this photo now"); otherwise play all.
         self._item_ids = list(item_ids) if item_ids is not None else None
-        # Hard cap on the on-disk cache. Without this the cache grows to the
-        # size of the entire library and fills the Pi's card, after which no
-        # photo can be downloaded and the frame goes dark.
+        # Caps on the on-disk cache. Without these the cache grows to the size
+        # of the entire library and fills the Pi's card, after which no photo
+        # can be downloaded and the frame goes dark. Kept to a handful of
+        # photos: the Pi runs off slow flash, so a big cache is a slow cache.
+        self._max_items = max_items
         self._max_bytes = max_bytes
+        # In-memory index of the cache, so eviction does not re-walk the whole
+        # cache directory on every download -- that walk is painfully slow on
+        # flash storage. Built once (lazily), then maintained incrementally.
+        self._entries: Optional[list[tuple[float, int, Path]]] = None
+        self._total_bytes = 0
 
-    def _enforce_cache_limit(self, keep: Path) -> None:
-        """Evict least-recently-used cached files until under ``max_bytes``.
-
-        *keep* is the file just downloaded; it is never evicted.  Recency is
-        the file mtime, which ``_item_from_raw`` refreshes on every cache hit,
-        so files still in rotation survive and stale ones (including cache
-        dirs orphaned by a server-side rotate) are reclaimed first.
-        """
-        if self._max_bytes <= 0:
-            return
+    def _scan_cache(self) -> None:
+        """Build the in-memory cache index with one directory walk."""
         entries: list[tuple[float, int, Path]] = []
         total = 0
         for path in self._cache_dir.rglob("*"):
@@ -124,28 +124,74 @@ class ServerProducer:
                 continue
             entries.append((stat.st_mtime, stat.st_size, path))
             total += stat.st_size
-        if total <= self._max_bytes:
+        self._entries = entries
+        self._total_bytes = total
+
+    def _note_cached(self, path: Path) -> None:
+        """Record a freshly downloaded file in the in-memory index."""
+        if self._entries is None:
+            self._scan_cache()  # the scan already includes *path*
+            return
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        self._entries.append((stat.st_mtime, stat.st_size, path))
+        self._total_bytes += stat.st_size
+
+    def _over_cap(self) -> bool:
+        entries = self._entries or []
+        if self._max_items > 0 and len(entries) > self._max_items:
+            return True
+        return self._max_bytes > 0 and self._total_bytes > self._max_bytes
+
+    def _enforce_cache_limit(self, keep: Path) -> None:
+        """Evict least-recently-used files until under both caps.
+
+        *keep* (the file just downloaded) is never evicted.  Recency is the
+        file mtime, which ``_item_from_raw`` refreshes on every cache hit, so
+        photos still in rotation survive while stale ones -- including cache
+        dirs orphaned by a server-side rotate -- are reclaimed first.
+        """
+        if self._entries is None:
+            self._scan_cache()
+        if not self._over_cap():
             return
 
-        entries.sort(key=lambda e: e[0])  # least recently used first
-        freed = 0
-        for _mtime, size, path in entries:
-            if total - freed <= self._max_bytes:
-                break
-            if path == keep:
+        entries = sorted(self._entries or [], key=lambda e: e[0])  # LRU first
+        survivors: list[tuple[float, int, Path]] = []
+        count = len(entries)
+        total = self._total_bytes
+        evicted = 0
+
+        for mtime, size, path in entries:
+            over = (self._max_items > 0 and count > self._max_items) or (
+                self._max_bytes > 0 and total > self._max_bytes
+            )
+            if not over or path == keep:
+                survivors.append((mtime, size, path))
                 continue
             try:
                 path.unlink()
             except OSError:
+                survivors.append((mtime, size, path))
                 continue
-            freed += size
-        _log.info(
-            "Photo cache over %d bytes; evicted %d bytes of least-recently-used "
-            "files (cache is disposable, files re-download on demand)",
-            self._max_bytes,
-            freed,
-        )
-        # Drop the now-empty per-item / per-sha256 directories left behind.
+            count -= 1
+            total -= size
+            evicted += 1
+
+        self._entries = survivors
+        self._total_bytes = total
+        if evicted:
+            _log.info(
+                "Photo cache over cap; evicted %d least-recently-used file(s) "
+                "(cache is disposable -- they re-download on demand)",
+                evicted,
+            )
+            self._prune_empty_dirs()
+
+    def _prune_empty_dirs(self) -> None:
+        """Remove the per-item / per-sha256 dirs left empty by eviction."""
         for path in sorted(
             self._cache_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True
         ):
@@ -252,6 +298,7 @@ class ServerProducer:
             ok = await self._download(item_id, filename, cached)
             if not ok:
                 return None
+            self._note_cached(cached)
             self._enforce_cache_limit(keep=cached)
         # effective_taken_at/effective_lat/effective_lon (computed server-side
         # from MediaMetadata) prefer a manual override over raw EXIF, so a

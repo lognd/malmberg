@@ -323,3 +323,35 @@ def test_server_producer_evicts_lru_when_cache_over_cap(tmp_path: Path) -> None:
     assert total <= 2048, "cache still over cap after eviction"
     assert keep.is_file(), "just-downloaded file must never be evicted"
     assert not old[0].is_file(), "least-recently-used file should be evicted first"
+
+
+def test_server_producer_caps_cache_to_a_handful_of_items(tmp_path: Path) -> None:
+    """The item cap keeps the cache to a handful of photos.
+
+    The Pi runs off slow flash: a large cache means slow reads and a slow
+    directory walk, so we keep only the photos around the current position.
+    """
+    import os
+
+    import httpx
+
+    from malmberg_display.slideshow.producers.server import ServerProducer
+
+    cache = tmp_path / "cache"
+    made = []
+    for i in range(10):
+        p = cache / f"i{i}" / "k" / f"p{i}.jpg"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"z" * 10)
+        os.utime(p, (2000 + i, 2000 + i))  # p0 oldest, p9 newest
+        made.append(p)
+
+    prod = ServerProducer(
+        "http://x", cache, httpx.AsyncClient(), max_items=3, max_bytes=0
+    )
+    prod._enforce_cache_limit(keep=made[-1])
+
+    left = [p for p in cache.rglob("*") if p.is_file()]
+    assert len(left) == 3, f"expected 3 cached photos, got {len(left)}"
+    assert made[-1] in left, "just-downloaded photo must survive"
+    assert made[0] not in left, "oldest photo should be evicted first"
