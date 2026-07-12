@@ -56,6 +56,24 @@ def _stop(player: Any) -> None:
         pass
 
 
+def _blank(ctx: DisplayContext) -> None:
+    """Paint the window black now that mpv has released it.
+
+    When a clip ends mpv stops drawing into the shared window and X treats that
+    region as undefined.  Nothing repaints it until the next item finishes
+    loading, so the desktop shows through -- the blue flash between videos.
+    Claiming the window back with a black frame closes that gap; the next photo
+    fades in over black instead of over the desktop.
+    """
+    screen = ctx.screen
+    if screen is None:
+        return
+    import pygame  # noqa: PLC0415 -- hardware-optional import deferred to runtime
+
+    screen.fill((0, 0, 0))
+    pygame.display.flip()
+
+
 class VideoDisplay(Displayable):
     """Plays a video file on the shared, embedded mpv player.
 
@@ -100,3 +118,7 @@ class VideoDisplay(Displayable):
         except Exception as exc:
             _log.warning("Video %s failed to play (%s); skipping", self._path.name, exc)
             _stop(player)
+        finally:
+            # Every exit path -- clean end, timeout, failure -- leaves the window
+            # to mpv unless we take it back.
+            _blank(ctx)
