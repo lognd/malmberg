@@ -103,6 +103,76 @@ def test_media_thumbnail(client: TestClient) -> None:
     assert len(t.content) < 900 * 1200  # much smaller than the source
 
 
+def test_transform_media_rotate_updates_meta_and_purges_thumbs(
+    client: TestClient, tmp_path: Path
+) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (120, 80), (120, 60, 30)).save(buf, "JPEG")
+    r = client.post(
+        "/upload", files={"file": ("photo.jpg", buf.getvalue(), "image/jpeg")}
+    )
+    item = r.json()
+    item_id = item["id"]
+    old_sha256 = item["meta"]["sha256"]
+
+    # Prime a cached thumbnail, then rotate: it must be purged so a stale
+    # (wrong-orientation) thumbnail is never served afterward.
+    t = client.get(f"/media/{item_id}/thumb")
+    assert t.status_code == 200
+    thumb_path = tmp_path / ".thumbs" / f"{item_id}_400.jpg"
+    assert thumb_path.is_file()
+
+    r2 = client.post(f"/media/{item_id}/transform", json={"rotate": 90})
+    assert r2.status_code == 200
+    updated = r2.json()
+    assert updated["meta"]["width"] == 80
+    assert updated["meta"]["height"] == 120
+    assert updated["meta"]["sha256"] != old_sha256
+    assert not thumb_path.is_file()
+
+    # A fresh thumbnail request regenerates from the rotated file.
+    t2 = client.get(f"/media/{item_id}/thumb")
+    assert t2.status_code == 200
+
+
+def test_transform_media_flip(client: TestClient) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (60, 40), (10, 200, 30)).save(buf, "JPEG")
+    r = client.post(
+        "/upload", files={"file": ("photo.jpg", buf.getvalue(), "image/jpeg")}
+    )
+    item_id = r.json()["id"]
+
+    r2 = client.post(f"/media/{item_id}/transform", json={"flip": "h"})
+    assert r2.status_code == 200
+    updated = r2.json()
+    assert updated["meta"]["width"] == 60
+    assert updated["meta"]["height"] == 40
+
+
+def test_transform_media_rejects_video(client: TestClient) -> None:
+    r = client.post(
+        "/upload",
+        files={"file": ("clip.mp4", b"\x00" * 16, "video/mp4")},
+    )
+    item_id = r.json()["id"]
+    r2 = client.post(f"/media/{item_id}/transform", json={"rotate": 90})
+    assert r2.status_code == 400
+
+
+def test_transform_media_not_found(client: TestClient) -> None:
+    r = client.post("/media/does-not-exist/transform", json={"rotate": 90})
+    assert r.status_code == 404
+
+
 def test_patch_media(client: TestClient) -> None:
     # Upload first.
     r = client.post(

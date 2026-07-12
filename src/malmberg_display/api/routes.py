@@ -435,6 +435,12 @@ def build_app(
         body = await request.json()
         return await _proxy_json("POST", f"/faces/{face_id}/reassign", json=body)
 
+    @app.post("/media/{item_id}/transform")
+    async def proxy_transform_media(item_id: str, request: Request) -> object:
+        """Proxy: permanently rotate/flip an image on the paired server."""
+        body = await request.json()
+        return await _proxy_json("POST", f"/media/{item_id}/transform", json=body)
+
     @app.delete("/media/{item_id}")
     async def proxy_delete_media(
         item_id: str, permanent: bool = Query(default=False)

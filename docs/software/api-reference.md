@@ -402,6 +402,53 @@ changed.
 
 ---
 
+### `POST /media/{id}/transform`
+
+Permanently rotate and/or flip an image, baking the change into the pixels
+of the file on disk. Images only -- this is not supported for videos.
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rotate` | int | One of `0` (default), `90`, `180`, `270`, `-90` (== `270`). Degrees clockwise. |
+| `flip` | `"h"` \| `"v"` \| null | Horizontal or vertical flip, applied after the rotate. |
+
+Any EXIF orientation the file already carried is normalized into the pixels
+first (so the requested transform composes correctly with however the file
+was already oriented), then the requested rotate/flip is applied. GPS,
+`DateTimeOriginal`, `Make`/`Model`, and the rest of the EXIF block are
+preserved byte-for-byte; only the `Orientation` tag is reset to `1`
+(normal) so viewers never double-rotate the result.
+
+**This rewrites the file's bytes, which invalidates four things -- all
+handled by this one endpoint:**
+
+1. `meta.sha256`, `meta.width`, `meta.height` are recomputed from the
+   rewritten file (dimensions swap on a 90/270 rotate) and the index is
+   persisted.
+2. Every cached thumbnail for the item (`/fs/.thumbs/{id}_*.jpg`) is
+   deleted so it regenerates from the new pixels on next request.
+3. The paired display's `ServerProducer` download cache is keyed by
+   `meta.sha256` (not just item id), so once the display next lists this
+   item it sees the new digest, misses its old cache entry, and
+   re-downloads -- it will not keep showing the stale orientation.
+4. **Any cloud-sync record tracking this item is marked `verified=false`.**
+   The local copy is no longer byte-identical to the cloud original, so it
+   must not keep reading as verified -- this is what prevents the guarded
+   cloud-cleanup (`POST /cloud/delete`) from deleting the cloud original
+   out from under an edited local copy. Re-verification will simply fail
+   until/unless the cloud copy is re-synced to match.
+
+**Response:** the updated `MediaItem`.
+
+**Errors:**
+- `400` -- attempted on a video, or on a trashed item
+- `404` -- item not found, or its file is missing from disk
+- `422` -- the file could not be decoded or re-encoded
+
+---
+
 ### `DELETE /media/{id}`
 
 Apply the hide policy for a media item (`?permanent=true` bypasses the hide

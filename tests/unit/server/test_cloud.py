@@ -130,6 +130,48 @@ async def test_verification_only_on_sha_match(tmp_path: Path) -> None:
     assert engine.verify_record(record) is False
 
 
+@pytest.mark.asyncio
+async def test_unverify_local_item_clears_flag_and_persists(tmp_path: Path) -> None:
+    """After a local edit (e.g. permanent rotate), the cloud record for that
+    item must stop reading as verified -- this is what stops the guarded
+    cloud-cleanup from deleting the cloud original out from under an edited
+    local copy."""
+    provider = FakeProvider("fake", {"a": b"content-a"})
+    engine = _engine(tmp_path, provider)
+    await engine.sync_provider(provider)
+
+    record = engine.get_record("fake", "a")
+    assert record is not None
+    assert record.verified is True
+    local_item_id = record.local_item_id
+    assert local_item_id is not None
+
+    result = engine.unverify_local_item(local_item_id)
+    assert result.is_ok
+    assert result.danger_ok == 1
+
+    reloaded = engine.get_record("fake", "a")
+    assert reloaded is not None
+    assert reloaded.verified is False
+
+    # Persisted to disk, not just in memory.
+    engine2 = _engine(tmp_path, provider)
+    engine2.load_state()
+    persisted = engine2.get_record("fake", "a")
+    assert persisted is not None
+    assert persisted.verified is False
+
+
+@pytest.mark.asyncio
+async def test_unverify_local_item_no_matching_records(tmp_path: Path) -> None:
+    """Unverifying an item with no cloud-sync record is a harmless no-op."""
+    provider = FakeProvider("fake", {})
+    engine = _engine(tmp_path, provider)
+    result = engine.unverify_local_item("no-such-item")
+    assert result.is_ok
+    assert result.danger_ok == 0
+
+
 # ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------

@@ -41,7 +41,9 @@ async def test_upload_and_producer_fetch(tmp_path: Path) -> None:
             "/upload", files={"file": ("red.png", _make_png(), "image/png")}
         )
         assert r.status_code == 200
-        item_id = r.json()["id"]
+        item = r.json()
+        item_id = item["id"]
+        sha_prefix = item["meta"]["sha256"][:12]
 
     cache = tmp_path / "cache"
     async with asgi_client(server_app, "http://server") as sc:
@@ -50,7 +52,10 @@ async def test_upload_and_producer_fetch(tmp_path: Path) -> None:
 
     assert len(items) == 1
     assert items[0].item_id == item_id
-    assert (cache / item_id / "red.png").is_file()
+    # Cache path is keyed by item id AND a content-digest prefix -- see
+    # ServerProducer._item_from_raw -- so a server-side edit that changes
+    # the digest lands at a new path and gets re-downloaded.
+    assert (cache / item_id / sha_prefix / "red.png").is_file()
 
 
 async def test_multiple_uploads_all_fetched(tmp_path: Path) -> None:
@@ -88,11 +93,13 @@ async def test_producer_cache_hit_skips_download(tmp_path: Path) -> None:
         r = await sc.post(
             "/upload", files={"file": ("photo.png", _make_png(), "image/png")}
         )
-        item_id = r.json()["id"]
+        item = r.json()
+        item_id = item["id"]
+        sha_prefix = item["meta"]["sha256"][:12]
 
     cache = tmp_path / "cache"
-    (cache / item_id).mkdir(parents=True)
-    cached_file = cache / item_id / "photo.png"
+    (cache / item_id / sha_prefix).mkdir(parents=True)
+    cached_file = cache / item_id / sha_prefix / "photo.png"
     cached_file.write_bytes(b"already cached")
 
     download_count = 0

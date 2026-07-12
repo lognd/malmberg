@@ -1455,6 +1455,24 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     cursor: pointer;
     text-align: left;
   }
+  .orient-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+  .orient-grid button {
+    min-height: 48px;
+    padding: 0 0.6rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--text);
+    cursor: pointer;
+    text-align: center;
+  }
+  .orient-grid button:disabled { opacity: 0.5; cursor: default; }
   #act-show { color: var(--accent); border-color: var(--accent); }
   #act-add-playlist { color: var(--aqua); border-color: var(--aqua); }
   #act-soft-delete { color: var(--warn); border-color: var(--warn); }
@@ -1857,6 +1875,22 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     <div id="modal-body">
       <div id="modal-title"></div>
       <dl class="detail-grid" id="modal-details"></dl>
+      <div class="modal-actions" id="orient-actions">
+        <div class="orient-grid">
+          <button id="act-rotate-left" type="button" aria-label="Rotate left">
+            Rotate left
+          </button>
+          <button id="act-rotate-right" type="button" aria-label="Rotate right">
+            Rotate right
+          </button>
+          <button id="act-flip-h" type="button" aria-label="Flip horizontal">
+            Flip horizontal
+          </button>
+          <button id="act-flip-v" type="button" aria-label="Flip vertical">
+            Flip vertical
+          </button>
+        </div>
+      </div>
       <div class="modal-actions">
         <button id="act-show" type="button">Display it now</button>
         <button id="act-add-playlist" type="button">Add to a slideshow</button>
@@ -2684,7 +2718,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       tile.className = "tile" + (selected ? " selected" : "");
 
       var img = document.createElement("img");
-      img.src = "/media/" + item.id + "/thumb";
+      var gridV = mediaVersionParam(item);
+      img.src = "/media/" + item.id + "/thumb" + (gridV ? "?" + gridV : "");
       img.alt = item.filename;
       img.loading = "lazy";
       tile.appendChild(img);
@@ -3722,6 +3757,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var actSoftDelete = document.getElementById("act-soft-delete");
   var actHardDelete = document.getElementById("act-hard-delete");
   var modalPlaylistPicker = document.getElementById("playlist-picker");
+  var orientActions = document.getElementById("orient-actions");
+  var actRotateLeft = document.getElementById("act-rotate-left");
+  var actRotateRight = document.getElementById("act-rotate-right");
+  var actFlipH = document.getElementById("act-flip-h");
+  var actFlipV = document.getElementById("act-flip-v");
+
+  /* Cache-bust an item's image/thumb URLs off its content digest, so a
+     rewritten file (rotate/flip) is never served stale from the browser's
+     HTTP cache -- the URL path is unchanged but the digest suffix is not. */
+  function mediaVersionParam(item) {
+    var sha = item && item.meta && item.meta.sha256;
+    return sha ? ("v=" + sha.slice(0, 12)) : "";
+  }
 
   var modalItem = null;
 
@@ -3775,14 +3823,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .then(function (item) {
         modalItem = item;
         modalTitle.textContent = item.filename;
+        orientActions.style.display = item.kind === "video" ? "none" : "";
         if (item.kind === "video") {
           modalImg.style.display = "none";
           modalVideo.className = "show";
           modalVideo.src = "/media/" + item.id;
         } else {
+          var v = mediaVersionParam(item);
           modalVideo.className = "";
           modalImg.style.display = "";
-          modalImg.src = "/media/" + item.id;
+          modalImg.src = "/media/" + item.id + (v ? "?" + v : "");
           modalImg.alt = item.filename;
         }
 
@@ -3884,6 +3934,53 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     renderPlaylistPicker(modalPlaylistPicker, function (name) {
       actAddToPlaylist(name, itemId, filename);
     });
+  });
+
+  function setOrientButtonsDisabled(disabled) {
+    actRotateLeft.disabled = disabled;
+    actRotateRight.disabled = disabled;
+    actFlipH.disabled = disabled;
+    actFlipV.disabled = disabled;
+  }
+
+  function doTransform(body) {
+    if (!modalItem) return;
+    var itemId = modalItem.id;
+    setOrientButtonsDisabled(true);
+    fetch("/media/" + itemId + "/transform", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("transform failed");
+        return r.json();
+      })
+      .then(function (updated) {
+        modalItem = updated;
+        var v = mediaVersionParam(updated);
+        modalImg.src = "/media/" + itemId + (v ? "?" + v : "");
+        showToast("Photo updated.", "ok");
+        setOrientButtonsDisabled(false);
+        loadGrid();
+      })
+      .catch(function () {
+        showToast("Could not update the photo.", "err");
+        setOrientButtonsDisabled(false);
+      });
+  }
+
+  actRotateLeft.addEventListener("click", function () {
+    doTransform({ rotate: -90 });
+  });
+  actRotateRight.addEventListener("click", function () {
+    doTransform({ rotate: 90 });
+  });
+  actFlipH.addEventListener("click", function () {
+    doTransform({ flip: "h" });
+  });
+  actFlipV.addEventListener("click", function () {
+    doTransform({ flip: "v" });
   });
 
   actSoftDelete.addEventListener("click", function () {

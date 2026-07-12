@@ -17,6 +17,7 @@ from malmberg_server.ingest.media import (
     make_thumbnail,
     reverse_geocode,
     sha256_of_file,
+    transform_image,
 )
 from malmberg_server.ingest.store import MediaStore
 
@@ -601,6 +602,138 @@ def test_make_thumbnail_video_poster_real_frame(tmp_path: Path) -> None:
     # The extracted frame is <=64px (source resolution); the drawn placeholder
     # is always exactly `size` x `size` (128x128), so this distinguishes them.
     assert out.size != (128, 128)
+
+
+# ---------------------------------------------------------------------------
+# transform_image -- permanent rotate/flip, with EXIF (GPS/date) preservation
+# ---------------------------------------------------------------------------
+
+
+def _make_jpeg_with_exif(path: Path, size=(80, 40), orientation: int = 1) -> None:
+    """Write a JPEG with GPS + DateTimeOriginal + Make/Model EXIF for testing.
+
+    A solid red block fills the top-left quadrant, blue fills the rest, so a
+    rotate/flip is verifiable by checking which quadrant reads red afterward
+    (a single corner pixel is too easily washed out by JPEG compression).
+    """
+    from PIL import ExifTags, Image
+
+    img = Image.new("RGB", size, (0, 0, 255))
+    half_w, half_h = size[0] // 2, size[1] // 2
+    for x in range(half_w):
+        for y in range(half_h):
+            img.putpixel((x, y), (255, 0, 0))
+    exif = img.getexif()
+    exif[0x0112] = orientation  # Orientation
+    exif[271] = "TestMake"  # Make
+    exif[272] = "TestModel"  # Model
+    exif_ifd = exif.get_ifd(ExifTags.IFD.Exif)
+    exif_ifd[36867] = "2020:01:02 03:04:05"  # DateTimeOriginal
+    gps_ifd = exif.get_ifd(ExifTags.IFD.GPSInfo)
+    gps_ifd[1] = "N"
+    gps_ifd[2] = (27.0, 58.0, 48.0)
+    gps_ifd[3] = "W"
+    gps_ifd[4] = (82.0, 49.0, 12.0)
+    img.save(path, exif=exif.tobytes())
+
+
+def test_transform_image_rotate_swaps_dimensions_and_pixels(tmp_path: Path) -> None:
+    from PIL import Image
+
+    path = tmp_path / "photo.jpg"
+    _make_jpeg_with_exif(path)
+
+    result = transform_image(path, rotate=90)
+    assert result.is_ok
+
+    out = Image.open(path)
+    assert out.size == (40, 80)  # width/height swapped
+    # 90 CW: the original top-left (red) quadrant moves to the top-right.
+    top_right = out.getpixel((30, 10))
+    assert top_right[0] > top_right[2]
+
+
+def test_transform_image_preserves_gps_date_and_camera(tmp_path: Path) -> None:
+    """The key regression: EXIF GPS/date/camera must survive a rotate, in the
+    FILE itself, not just the in-memory index -- MediaStore re-extracts from
+    disk on schema bumps."""
+    path = tmp_path / "photo.jpg"
+    _make_jpeg_with_exif(path)
+
+    before = extract_exif(path)
+    assert before.is_ok
+    before_meta = before.danger_ok
+    assert before_meta.lat is not None
+    assert before_meta.lon is not None
+    assert before_meta.taken_at is not None
+    assert before_meta.camera_model == "TestMake TestModel"
+
+    result = transform_image(path, rotate=90)
+    assert result.is_ok
+
+    after = extract_exif(path)
+    assert after.is_ok
+    after_meta = after.danger_ok
+    assert after_meta.width == 40
+    assert after_meta.height == 80
+    assert after_meta.lat == pytest.approx(before_meta.lat, abs=1e-4)
+    assert after_meta.lon == pytest.approx(before_meta.lon, abs=1e-4)
+    assert after_meta.taken_at == before_meta.taken_at
+    assert after_meta.camera_model == before_meta.camera_model
+    # Content changed, so the digest must differ.
+    assert after_meta.sha256 != before_meta.sha256
+
+
+def test_transform_image_normalizes_orientation_tag(tmp_path: Path) -> None:
+    """A source file with a non-1 Orientation tag ends up baked-in and normal."""
+    from PIL import ExifTags, Image
+
+    path = tmp_path / "photo.jpg"
+    _make_jpeg_with_exif(path, orientation=6)  # rotated 90 CW display
+
+    result = transform_image(path, rotate=0)
+    assert result.is_ok
+
+    out = Image.open(path)
+    out_exif = out.getexif()
+    assert out_exif.get(0x0112, 1) == 1
+    # exif_transpose baked orientation=6 (rotate 270 CW display) into pixels:
+    # dimensions swap relative to the raw stored size.
+    assert out.size == (40, 80)
+    # ImageOps consumers won't be confused: no ExifTags.Base.Orientation left.
+    assert ExifTags.Base.Orientation not in out.getexif() or (
+        out.getexif()[ExifTags.Base.Orientation] == 1
+    )
+
+
+def test_transform_image_flip_horizontal(tmp_path: Path) -> None:
+    from PIL import Image
+
+    path = tmp_path / "photo.jpg"
+    _make_jpeg_with_exif(path)
+    result = transform_image(path, flip="h")
+    assert result.is_ok
+    out = Image.open(path)
+    assert out.size == (80, 40)
+    # The red top-left quadrant is now the top-right quadrant.
+    top_right = out.getpixel((60, 10))
+    assert top_right[0] > top_right[2]
+
+
+def test_transform_image_rejects_video(tmp_path: Path) -> None:
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"\x00" * 16)
+    result = transform_image(path, rotate=90)
+    assert result.is_err
+    assert result.danger_err is IngestError.UnsupportedMedia
+
+
+def test_transform_image_undecodable_file(tmp_path: Path) -> None:
+    path = tmp_path / "garbage.jpg"
+    path.write_bytes(b"this is not an image")
+    result = transform_image(path, rotate=90)
+    assert result.is_err
+    assert result.danger_err is IngestError.ExifError
 
 
 def test_make_thumbnail_video_poster_falls_back_on_bad_file(tmp_path: Path) -> None:

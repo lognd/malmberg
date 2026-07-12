@@ -43,7 +43,7 @@ from malmberg_server.faces.faces_index import FaceStore
 from malmberg_server.faces.people import PersonStore
 from malmberg_server.faces.worker import run_face_worker, sync_person_ids
 from malmberg_server.ingest.errors import IngestError
-from malmberg_server.ingest.media import make_thumbnail
+from malmberg_server.ingest.media import extract_exif, make_thumbnail, transform_image
 from malmberg_server.ingest.playlists import PlaylistStore
 from malmberg_server.ingest.store import MediaStore
 from malmberg_server.ingest.upload import handle_upload
@@ -145,6 +145,17 @@ class MediaPatch(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class MediaTransformRequest(BaseModel):
+    """Request body for POST /media/{item_id}/transform.
+
+    *rotate* is degrees clockwise: 0, 90, 180, 270, or -90 (== 270). *flip*
+    is "h" (horizontal), "v" (vertical), or omitted/None for no flip.
+    """
+
+    rotate: Literal[0, 90, 180, 270, -90] = 0
+    flip: Optional[Literal["h", "v"]] = None
+
+
 _INGEST_ERRORS = {
     IngestError.FileTooLarge: (413, "File exceeds maximum upload size"),
     IngestError.DuplicateFile: (409, "A file with this content already exists"),
@@ -152,6 +163,7 @@ _INGEST_ERRORS = {
     IngestError.IOError: (500, "I/O error during upload"),
     IngestError.StorageError: (500, "Media store error"),
     IngestError.NotFound: (404, "Media item not found"),
+    IngestError.UnsupportedMedia: (400, "This operation is not supported for videos"),
 }
 
 
@@ -653,6 +665,72 @@ def build_app(
         if save.is_err:
             _log.error("Failed to persist media index after patch")
         return result.danger_ok.model_dump()
+
+    @app.post("/media/{item_id}/transform")
+    async def transform_media(item_id: str, body: MediaTransformRequest) -> dict:
+        """Permanently rotate/flip an image, baking the change into the file.
+
+        Rewriting the bytes ripples through four caches/records, all handled
+        here: (1) meta.sha256/width/height are recomputed from the rewritten
+        file and the index persisted; (2) every cached thumbnail for this
+        item is dropped so it regenerates from the new pixels; (3) the
+        display's ServerProducer keys its download cache off meta.sha256, so
+        once the new sha256 is served the Pi re-downloads instead of showing
+        the stale cached orientation forever; (4) any cloud-sync record
+        tracking this item is marked unverified, since the local copy is no
+        longer byte-identical to the cloud original -- this is deliberate,
+        it is what stops the guarded cloud-cleanup from deleting the cloud
+        copy out from under an edited local one.
+        """
+        item = _store.get(item_id, media_root=_media_root())
+        if item is None:
+            raise HTTPException(status_code=404, detail="Media item not found")
+        if item.kind == "video":
+            _raise_ingest(IngestError.UnsupportedMedia)
+        if item.trashed_at is not None:
+            raise HTTPException(
+                status_code=400, detail="Cannot transform a trashed item"
+            )
+        path = _media_root() / item.server_path
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        result = transform_image(path, rotate=body.rotate, flip=body.flip)
+        if result.is_err:
+            _raise_ingest(result.danger_err)
+
+        meta_result = extract_exif(path)
+        if meta_result.is_err:
+            _raise_ingest(meta_result.danger_err)
+        new_meta = meta_result.danger_ok.model_copy(
+            update={"ingest_at": item.meta.ingest_at}
+        )
+        patched = _store.patch(item_id, {"meta": new_meta})
+        if patched.is_err:
+            _raise_ingest(patched.danger_err)
+
+        for thumb in (cfg.fs_root / ".thumbs").glob(f"{item_id}_*.jpg"):
+            thumb.unlink(missing_ok=True)
+
+        unverify = _cloud_engine.unverify_local_item(item_id)
+        if unverify.is_err:
+            _log.error("Failed to persist cloud state after unverifying %s", item_id)
+
+        save = _store.save_to_disk(_index_path())
+        if save.is_err:
+            _log.error("Failed to persist media index after transform")
+
+        _log.info(
+            "Transformed %s (%s): rotate=%s flip=%s -> sha256=%s %dx%d",
+            item_id,
+            item.filename,
+            body.rotate,
+            body.flip,
+            new_meta.sha256,
+            new_meta.width,
+            new_meta.height,
+        )
+        return patched.danger_ok.model_dump(mode="json")
 
     @app.delete("/media/{item_id}")
     async def delete_media(

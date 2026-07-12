@@ -110,9 +110,10 @@ async def test_server_producer_yields_cached_items(tmp_path: Path) -> None:
     list_resp.raise_for_status = MagicMock()
     list_resp.json = MagicMock(return_value=media_page)
 
-    # Pre-create the file so _download is NOT called (tests cache-hit path).
-    (tmp_path / "abc").mkdir()
-    (tmp_path / "abc" / "photo.jpg").write_bytes(b"img")
+    # Pre-create the file at the (no-sha256) cache path so _download is NOT
+    # called (tests cache-hit path).
+    (tmp_path / "abc" / "nosha").mkdir(parents=True)
+    (tmp_path / "abc" / "nosha" / "photo.jpg").write_bytes(b"img")
 
     mock_client.get = AsyncMock(return_value=list_resp)
 
@@ -134,6 +135,89 @@ async def test_server_producer_skips_on_http_error(tmp_path: Path) -> None:
     assert items == []
 
 
+@pytest.mark.asyncio
+async def test_server_producer_cache_hit_when_sha256_unchanged(tmp_path: Path) -> None:
+    """The same sha256 across two /media fetches serves from cache, no re-GET."""
+    media_page = {
+        "items": [{"id": "abc", "filename": "photo.jpg", "meta": {"sha256": "aaa111"}}],
+        "has_next": False,
+    }
+    # cache_key is sha256[:12]; "aaa111" is under 12 chars so it is used whole.
+    (tmp_path / "abc" / "aaa111").mkdir(parents=True)
+    (tmp_path / "abc" / "aaa111" / "photo.jpg").write_bytes(b"img")
+
+    mock_client = AsyncMock()
+    list_resp = MagicMock()
+    list_resp.raise_for_status = MagicMock()
+    list_resp.json = MagicMock(return_value=media_page)
+    mock_client.get = AsyncMock(return_value=list_resp)
+    mock_client.stream = MagicMock(
+        side_effect=AssertionError("must not re-download on a cache hit")
+    )
+
+    producer = ServerProducer("http://server:8000", tmp_path, mock_client)
+    items = [item async for item in producer.items()]
+    assert len(items) == 1
+    assert items[0].item_id == "abc"
+
+
+@pytest.mark.asyncio
+async def test_server_producer_redownloads_when_sha256_changes(
+    tmp_path: Path,
+) -> None:
+    """A changed meta.sha256 (server-side edit, e.g. permanent rotate) lands
+    at a different cache path and is re-downloaded rather than serving the
+    stale cached orientation forever."""
+    # Old cache entry under the OLD digest -- must be left alone, not read.
+    (tmp_path / "abc" / "oldsha0000aa").mkdir(parents=True)
+    (tmp_path / "abc" / "oldsha0000aa" / "photo.jpg").write_bytes(b"old-bytes")
+
+    media_page = {
+        "items": [
+            {
+                "id": "abc",
+                "filename": "photo.jpg",
+                "meta": {"sha256": "newsha0000bb-rest-ignored"},
+            }
+        ],
+        "has_next": False,
+    }
+
+    class _FakeStreamResp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            pass
+
+        async def aiter_bytes(self, chunk_size: int = 65536):
+            yield b"new-bytes"
+
+    class _FakeStreamCtx:
+        async def __aenter__(self) -> "_FakeStreamResp":
+            return _FakeStreamResp()
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    mock_client = AsyncMock()
+    list_resp = MagicMock()
+    list_resp.raise_for_status = MagicMock()
+    list_resp.json = MagicMock(return_value=media_page)
+    mock_client.get = AsyncMock(return_value=list_resp)
+    mock_client.stream = MagicMock(return_value=_FakeStreamCtx())
+
+    producer = ServerProducer("http://server:8000", tmp_path, mock_client)
+    items = [item async for item in producer.items()]
+
+    assert len(items) == 1
+    new_cache_dir = tmp_path / "abc" / "newsha0000bb"
+    assert (new_cache_dir / "photo.jpg").read_bytes() == b"new-bytes"
+    # The old cache entry is untouched (left behind, not read or deleted).
+    assert (tmp_path / "abc" / "oldsha0000aa" / "photo.jpg").read_bytes() == (
+        b"old-bytes"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ServerProducer -- single/playlist selection (item_ids) resolves per id
 # ---------------------------------------------------------------------------
@@ -144,8 +228,8 @@ async def test_server_producer_selected_ids_fetch_info_directly(
     tmp_path: Path,
 ) -> None:
     """_stream_selected must hit /media/{id}/info per id, not page /media."""
-    (tmp_path / "abc").mkdir()
-    (tmp_path / "abc" / "photo.jpg").write_bytes(b"img")
+    (tmp_path / "abc" / "nosha").mkdir(parents=True)
+    (tmp_path / "abc" / "nosha" / "photo.jpg").write_bytes(b"img")
 
     info_resp = MagicMock()
     info_resp.raise_for_status = MagicMock()
@@ -179,8 +263,8 @@ async def test_server_producer_selected_ids_survive_one_failure(
     """
     import httpx
 
-    (tmp_path / "b").mkdir()
-    (tmp_path / "b" / "b.jpg").write_bytes(b"img")
+    (tmp_path / "b" / "nosha").mkdir(parents=True)
+    (tmp_path / "b" / "nosha" / "b.jpg").write_bytes(b"img")
 
     ok_resp = MagicMock()
     ok_resp.raise_for_status = MagicMock()

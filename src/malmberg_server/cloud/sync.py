@@ -354,6 +354,28 @@ class CloudSyncEngine:
         self._state.records[key] = record
         return self.save_state()
 
+    def unverify_local_item(self, local_item_id: str) -> Result[int, CloudError]:
+        """Clear ``verified`` on every record tracking *local_item_id*, then save.
+
+        Called after a local edit (e.g. a permanent rotate/flip) rewrites the
+        file's bytes: the local copy is no longer byte-identical to the cloud
+        original, so it must NOT keep reading as verified -- delete_verified
+        re-hashes from disk before ever deleting, but the cached flag also
+        drives /cloud/status counts and dry-run listings, so it must not lie.
+        Returns Ok(n) with the number of records cleared (0 if none tracked
+        this item -- not an error, most items are never cloud-synced).
+        """
+        cleared = 0
+        for record in self._state.records.values():
+            if record.local_item_id == local_item_id and record.verified:
+                record.verified = False
+                cleared += 1
+        if cleared:
+            save = self.save_state()
+            if save.is_err:
+                return save
+        return Ok(cleared)
+
     def verify_record(self, record: CloudSyncRecord) -> bool:
         """Re-hash the local file from disk NOW and compare to record.sha256.
 

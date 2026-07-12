@@ -198,6 +198,105 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
     )
 
 
+_ORIENTATION_TAG = 0x0112
+"""EXIF tag id for Orientation (IFD0). Reset to 1 (normal) after baking a
+rotate/flip into the pixels, so viewers never double-rotate the result."""
+
+_ROTATE_OPS: dict[int, int] = {
+    90: Image.Transpose.ROTATE_270,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_90,
+}
+"""Map a *clockwise* degree request onto the PIL transpose that achieves it.
+
+PIL's ROTATE_90/ROTATE_270 constants rotate counter-clockwise, so a 90 CW
+request needs ROTATE_270 and vice versa; 270 CW (== 90 CCW, i.e. rotate=-90
+normalized to 270) needs ROTATE_90.
+"""
+
+_FLIP_OPS: dict[str, int] = {
+    "h": Image.Transpose.FLIP_LEFT_RIGHT,
+    "v": Image.Transpose.FLIP_TOP_BOTTOM,
+}
+
+
+def transform_image(
+    path: Path, *, rotate: int = 0, flip: str | None = None
+) -> Result[None, IngestError]:
+    """Permanently rotate/flip the image at *path*, baking the change into pixels.
+
+    *rotate* is degrees clockwise: one of 0, 90, 180, 270, or -90 (== 270).
+    *flip* is "h" (horizontal), "v" (vertical), or None. Any existing EXIF
+    orientation is first normalized into the pixels (``ImageOps.exif_transpose``)
+    so the requested transform composes with whatever orientation the file
+    already carried, then the requested rotate/flip is applied on top.
+
+    EXIF is preserved: the original Exif object (GPS, DateTimeOriginal,
+    Make/Model, and everything else) is captured before any transform and
+    re-attached on save, with ONLY the Orientation tag reset to 1 (normal) --
+    every other tag, including the GPSInfo and Exif sub-IFDs, round-trips
+    byte-for-byte via ``Exif.tobytes()``. This matters: MediaStore lazily
+    re-extracts metadata from the FILE (not just the in-memory index) when
+    its schema version bumps, so location/date data that only lived in the
+    index would otherwise be silently lost on a later refresh.
+
+    Rejects videos (IngestError.UnsupportedMedia) -- this is an images-only
+    operation. Returns Err(IngestError.ExifError) for an undecodable image,
+    Err(IngestError.IOError) for a read/write failure, and Err(ExifError) if
+    the transformed pixels cannot be re-encoded (e.g. a write-unsupported
+    format) -- in all error cases the file on disk is left untouched.
+    """
+    if path.suffix.lower() in _VIDEO_EXTS:
+        return Err(IngestError.UnsupportedMedia)
+
+    rotate_norm = rotate % 360
+    if rotate_norm not in (0, 90, 180, 270):
+        return Err(IngestError.ExifError)
+    if flip is not None and flip not in _FLIP_OPS:
+        return Err(IngestError.ExifError)
+
+    try:
+        img = Image.open(path)
+        img.load()
+        fmt = img.format
+        # Capture the ORIGINAL Exif object (top-level IFD0, still linked to
+        # the Exif/GPSInfo sub-IFDs). exif_transpose() reads orientation off
+        # this same live object internally, so it MUST run before the
+        # orientation tag is normalized below -- normalizing first would
+        # make exif_transpose see "1" and skip baking in the existing
+        # orientation entirely.
+        exif = img.getexif()
+        transformed = ImageOps.exif_transpose(img)
+        if transformed is None:
+            transformed = img
+        if _ORIENTATION_TAG in exif:
+            del exif[_ORIENTATION_TAG]
+        exif[_ORIENTATION_TAG] = 1
+        if rotate_norm in _ROTATE_OPS:
+            transformed = transformed.transpose(_ROTATE_OPS[rotate_norm])
+        if flip is not None:
+            transformed = transformed.transpose(_FLIP_OPS[flip])
+
+        save_kwargs: dict = {"exif": exif.tobytes()}
+        if fmt == "JPEG":
+            if transformed.mode not in ("RGB", "L"):
+                transformed = transformed.convert("RGB")
+            save_kwargs["quality"] = 92
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        transformed.save(tmp, format=fmt, **save_kwargs)
+        tmp.replace(path)
+        return Ok(None)
+    except UnidentifiedImageError:
+        _log.warning("transform_image: undecodable image: %s", path)
+        return Err(IngestError.ExifError)
+    except OSError:
+        _log.warning("transform_image: I/O error on %s", path, exc_info=True)
+        return Err(IngestError.IOError)
+    except Exception:
+        _log.warning("transform_image: failed to transform %s", path, exc_info=True)
+        return Err(IngestError.ExifError)
+
+
 def make_thumbnail(
     src: Path, dest: Path, size: int, *, is_video: bool = False
 ) -> Result[Path, IngestError]:

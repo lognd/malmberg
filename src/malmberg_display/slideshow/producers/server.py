@@ -167,15 +167,26 @@ class ServerProducer:
         return resp.json()
 
     async def _item_from_raw(self, raw: dict) -> Optional[CachedItem]:
-        """Build (downloading if needed) a CachedItem from a raw media record."""
+        """Build (downloading if needed) a CachedItem from a raw media record.
+
+        The cache path is keyed by both item id and a sha256 prefix (from
+        meta.sha256, which the server recomputes on every content-changing
+        edit -- e.g. a permanent rotate/flip). A server-side edit therefore
+        changes the digest, which changes the cache path, so the file is
+        re-downloaded instead of silently serving the stale cached
+        orientation forever. Old per-sha256 cache dirs for a since-edited
+        item are simply left behind (harmless, never read again).
+        """
         item_id = raw.get("id", "")
         filename = raw.get("filename", "unknown")
-        cached = self._cache_dir / item_id / filename
+        meta = raw.get("meta") or {}
+        digest = meta.get("sha256") or ""
+        cache_key = digest[:12] if digest else "nosha"
+        cached = self._cache_dir / item_id / cache_key / filename
         if not cached.is_file():
             ok = await self._download(item_id, filename, cached)
             if not ok:
                 return None
-        meta = raw.get("meta") or {}
         taken_at: Optional[datetime] = None
         if ts := meta.get("taken_at"):
             try:

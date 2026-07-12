@@ -12,3 +12,4 @@ class IngestError(ErrorSet):
     DuplicateFile = "A file with the same SHA-256 digest already exists"
     NotFound = "The requested media item does not exist"
     StorageError = "The media store could not persist or read its index"
+    UnsupportedMedia = "This operation is not supported for this media kind"
