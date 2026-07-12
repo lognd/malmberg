@@ -219,6 +219,95 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     outline: none;
   }
   .month-chip b { color: var(--aqua); font-weight: 700; }
+  /* Hierarchical time/place breakdowns. A flat chip list ran to hundreds of
+     entries; these collapse (native <details>) and scroll instead. */
+  .tree-block { margin-top: 0.9rem; }
+  .tree-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.35rem;
+  }
+  .tree-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    font-weight: 700;
+  }
+  .tree-expand, .tree-collapse {
+    min-height: 32px;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.72rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .tree-box {
+    max-height: 22rem;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-alt);
+    padding: 0.4rem 0.5rem;
+  }
+  .tree-node > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 0.45rem 0.3rem;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    color: var(--text);
+    border-radius: 6px;
+  }
+  .tree-node > summary::-webkit-details-marker { display: none; }
+  .tree-node > summary::before {
+    content: "\\25B8";           /* right-pointing triangle */
+    color: var(--muted);
+    font-size: 0.8rem;
+    transition: transform 0.12s;
+  }
+  .tree-node[open] > summary::before { transform: rotate(90deg); }
+  .tree-node > summary:hover { background: var(--panel); }
+  .tn-count {
+    color: var(--aqua);
+    font-weight: 700;
+    min-width: 2.5rem;
+    text-align: right;
+  }
+  .tree-children {
+    margin-left: 1rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+  }
+  .tree-leaf {
+    min-height: 38px;
+    width: 100%;
+    text-align: left;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.85rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .tree-leaf:hover, .tree-leaf:focus-visible {
+    background: var(--panel);
+    border-color: var(--accent);
+    outline: none;
+  }
+  .tree-leaf.tn-all { color: var(--accent); font-weight: 700; }
   /* By-place breakdown, same chip look as by-year */
   #by-place {
     margin-top: 0.85rem;
@@ -1723,9 +1812,30 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       <h2>Library</h2>
       <div id="stats-count">-- <span class="label">photos and videos</span></div>
       <div class="stats-grid" id="stats-grid"></div>
-      <div id="by-year"></div>
-      <div id="by-month"></div>
-      <div id="by-place"></div>
+      <div class="tree-block">
+        <div class="tree-head">
+          <span class="tree-title">By time</span>
+          <button type="button" class="tree-expand" data-target="by-time">
+            Expand all
+          </button>
+          <button type="button" class="tree-collapse" data-target="by-time">
+            Collapse all
+          </button>
+        </div>
+        <div id="by-time" class="tree-box"></div>
+      </div>
+      <div class="tree-block">
+        <div class="tree-head">
+          <span class="tree-title">By place</span>
+          <button type="button" class="tree-expand" data-target="by-place">
+            Expand all
+          </button>
+          <button type="button" class="tree-collapse" data-target="by-place">
+            Collapse all
+          </button>
+        </div>
+        <div id="by-place" class="tree-box"></div>
+      </div>
       <div id="by-person"></div>
     </section>
 
@@ -2072,14 +2182,182 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   /* ---- Stats ---- */
   var statsCount = document.getElementById("stats-count");
   var statsGrid = document.getElementById("stats-grid");
-  var byYear = document.getElementById("by-year");
-  var byMonth = document.getElementById("by-month");
   var byPlace = document.getElementById("by-place");
   var byPerson = document.getElementById("by-person");
   var MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
   ];
+
+  /* ---- Hierarchical time / place breakdowns ----
+     The flat chip lists ran to hundreds of entries. Group them into a
+     collapsible tree (native <details>, so it is keyboard accessible for
+     free): 2026 > January, and US > Florida > Clearwater. Each row filters
+     the browse grid; a parent row filters by that whole branch, which works
+     because place search is a substring match on 'City, Region, CC'. */
+
+  var COUNTRY_NAMES = {
+    US: 'United States', GB: 'United Kingdom', ES: 'Spain', CU: 'Cuba',
+    SE: 'Sweden', MX: 'Mexico', CO: 'Colombia', NL: 'Netherlands',
+    DE: 'Germany', FR: 'France', IT: 'Italy', CA: 'Canada', PT: 'Portugal',
+    BE: 'Belgium', MD: 'Moldova', BZ: 'Belize', ID: 'Indonesia',
+    SG: 'Singapore', HU: 'Hungary', CN: 'China', JP: 'Japan', IE: 'Ireland',
+    CH: 'Switzerland', AT: 'Austria', GR: 'Greece', TR: 'Turkey',
+    AU: 'Australia', NZ: 'New Zealand', BR: 'Brazil', AR: 'Argentina',
+    RU: 'Russia', IN: 'India', ZA: 'South Africa', NO: 'Norway',
+    DK: 'Denmark', FI: 'Finland', PL: 'Poland', CZ: 'Czechia'
+  };
+
+  function treeNode(label, count, opts) {
+    var node = document.createElement('details');
+    node.className = 'tree-node';
+    var summary = document.createElement('summary');
+    var c = document.createElement('span');
+    c.className = 'tn-count';
+    c.textContent = String(count);
+    summary.appendChild(c);
+    summary.appendChild(document.createTextNode(label));
+    node.appendChild(summary);
+    var kids = document.createElement('div');
+    kids.className = 'tree-children';
+    node.appendChild(kids);
+    return { node: node, kids: kids };
+  }
+
+  function treeLeaf(label, count, isAll, onPick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tree-leaf' + (isAll ? ' tn-all' : '');
+    var c = document.createElement('span');
+    c.className = 'tn-count';
+    c.textContent = String(count);
+    b.appendChild(c);
+    b.appendChild(document.createTextNode(' ' + label));
+    b.setAttribute('aria-label', 'Search and browse ' + label);
+    b.addEventListener('click', onPick);
+    return b;
+  }
+
+  function pickTime(value) {
+    timeInput.value = value;
+    state.qTime = value;
+    state.page = 1;
+    loadGrid();
+    showResultsBelow();
+  }
+
+  function pickPlace(value) {
+    placeInput.value = value;
+    state.qPlace = value;
+    state.page = 1;
+    loadGrid();
+    showResultsBelow();
+  }
+
+  function renderTimeTree(byYear, byMonth) {
+    var box = document.getElementById('by-time');
+    box.innerHTML = '';
+    var months = {};
+    Object.keys(byMonth).forEach(function (ym) {
+      (months[ym.slice(0, 4)] = months[ym.slice(0, 4)] || []).push(ym);
+    });
+    Object.keys(byYear).sort().reverse().forEach(function (year) {
+      var group = treeNode(year, byYear[year]);
+      group.kids.appendChild(
+        treeLeaf('All of ' + year, byYear[year], true, function () {
+          pickTime(year);
+        })
+      );
+      (months[year] || []).sort().reverse().forEach(function (ym) {
+        var mi = parseInt(ym.slice(5, 7), 10) - 1;
+        var name = MONTH_NAMES[mi] || ym.slice(5, 7);
+        group.kids.appendChild(
+          treeLeaf(name + ' ' + year, byMonth[ym], false, function () {
+            pickTime(ym);
+          })
+        );
+      });
+      box.appendChild(group.node);
+    });
+    if (!box.children.length) {
+      box.textContent = 'No dated photos yet.';
+    }
+  }
+
+  function renderPlaceTree(byPlace) {
+    var box = document.getElementById('by-place');
+    box.innerHTML = '';
+    // Labels are 'City, Region, CC' -- fold them into country > region > city.
+    var tree = {};
+    Object.keys(byPlace).forEach(function (label) {
+      var parts = label.split(',').map(function (s) { return s.trim(); });
+      var cc = parts.length >= 3 ? parts[parts.length - 1] : '??';
+      var region = parts.length >= 2 ? parts[parts.length - 2] : label;
+      var city = parts[0];
+      var country = (tree[cc] = tree[cc] || { n: 0, regions: {} });
+      country.n += byPlace[label];
+      var reg = (country.regions[region] = country.regions[region] ||
+        { n: 0, cities: [] });
+      reg.n += byPlace[label];
+      reg.cities.push({ city: city, label: label, n: byPlace[label] });
+    });
+
+    Object.keys(tree)
+      .sort(function (a, b) { return tree[b].n - tree[a].n; })
+      .forEach(function (cc) {
+        var country = tree[cc];
+        var cname = COUNTRY_NAMES[cc] || cc;
+        var cNode = treeNode(cname, country.n);
+        cNode.kids.appendChild(
+          treeLeaf('All of ' + cname, country.n, true, function () {
+            pickPlace(', ' + cc);
+          })
+        );
+        Object.keys(country.regions)
+          .sort(function (a, b) {
+            return country.regions[b].n - country.regions[a].n;
+          })
+          .forEach(function (region) {
+            var reg = country.regions[region];
+            var rNode = treeNode(region, reg.n);
+            rNode.kids.appendChild(
+              treeLeaf('All of ' + region, reg.n, true, function () {
+                pickPlace(region);
+              })
+            );
+            reg.cities
+              .sort(function (a, b) { return b.n - a.n; })
+              .forEach(function (c) {
+                rNode.kids.appendChild(
+                  treeLeaf(c.city, c.n, false, function () {
+                    pickPlace(c.label);
+                  })
+                );
+              });
+            cNode.kids.appendChild(rNode.node);
+          });
+        box.appendChild(cNode.node);
+      });
+    if (!box.children.length) {
+      box.textContent = 'No located photos yet.';
+    }
+  }
+
+  // Expand / collapse all, per tree.
+  Array.prototype.forEach.call(
+    document.querySelectorAll('.tree-expand, .tree-collapse'),
+    function (btn) {
+      btn.addEventListener('click', function () {
+        var box = document.getElementById(btn.getAttribute('data-target'));
+        if (!box) return;
+        var open = btn.classList.contains('tree-expand');
+        Array.prototype.forEach.call(
+          box.querySelectorAll('details'),
+          function (d) { d.open = open; }
+        );
+      });
+    }
+  );
 
   function loadStats() {
     fetch("/stats")
@@ -2104,87 +2382,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           tile.querySelector(".k").textContent = pair[0];
           statsGrid.appendChild(tile);
         });
-        byYear.innerHTML = "";
-        Object.keys(data.by_year || {}).sort().forEach(function (year) {
-          var chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "year-chip";
-          chip.innerHTML = "<b></b> " + year;
-          chip.querySelector("b").textContent = String(data.by_year[year]);
-          chip.title = "Search and browse " + year;
-          chip.setAttribute("aria-label", "Search and browse photos from " + year);
-          chip.addEventListener("click", function () {
-            timeInput.value = year;
-            state.qTime = year;
-            state.page = 1;
-            loadGrid();
-            showResultsBelow();
-          });
-          byYear.appendChild(chip);
-        });
-        // Granular month breakdown, grouped under each year (newest first).
-        byMonth.innerHTML = "";
-        var byMonthData = data.by_month || {};
-        var monthsByYear = {};
-        Object.keys(byMonthData).forEach(function (ym) {
-          var y = ym.slice(0, 4);
-          (monthsByYear[y] = monthsByYear[y] || []).push(ym);
-        });
-        Object.keys(monthsByYear).sort().reverse().forEach(function (year) {
-          var group = document.createElement("div");
-          group.className = "month-group";
-          var yearEl = document.createElement("div");
-          yearEl.className = "mg-year";
-          yearEl.textContent = year;
-          var monthsEl = document.createElement("div");
-          monthsEl.className = "mg-months";
-          monthsByYear[year].sort().forEach(function (ym) {
-            var mi = parseInt(ym.slice(5, 7), 10) - 1;
-            var monthName = MONTH_NAMES[mi] || ym.slice(5, 7);
-            var chip = document.createElement("button");
-            chip.type = "button";
-            chip.className = "month-chip";
-            chip.innerHTML = "<b></b> ";
-            chip.querySelector("b").textContent = String(byMonthData[ym]);
-            chip.appendChild(document.createTextNode(monthName));
-            chip.title = "Search and browse " + monthName + " " + year;
-            chip.setAttribute(
-              "aria-label",
-              "Search and browse photos from " + monthName + " " + year
-            );
-            chip.addEventListener("click", function () {
-              timeInput.value = ym;
-              state.qTime = ym;
-              state.page = 1;
-              loadGrid();
-              showResultsBelow();
-            });
-            monthsEl.appendChild(chip);
-          });
-          group.appendChild(yearEl);
-          group.appendChild(monthsEl);
-          byMonth.appendChild(group);
-        });
-        byPlace.innerHTML = "";
-        var byPlaceData = data.by_place || {};
-        Object.keys(byPlaceData).forEach(function (place) {
-          var chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "place-chip";
-          chip.innerHTML = "<b></b> ";
-          chip.querySelector("b").textContent = String(byPlaceData[place]);
-          chip.appendChild(document.createTextNode(place));
-          chip.title = "Search and browse " + place;
-          chip.setAttribute("aria-label", "Search and browse photos from " + place);
-          chip.addEventListener("click", function () {
-            placeInput.value = place;
-            state.qPlace = place;
-            state.page = 1;
-            loadGrid();
-            showResultsBelow();
-          });
-          byPlace.appendChild(chip);
-        });
+        renderTimeTree(data.by_year || {}, data.by_month || {});
+        renderPlaceTree(data.by_place || {});
         byPerson.innerHTML = "";
         var byPersonData = data.by_person || {};
         Object.keys(byPersonData).forEach(function (name) {
