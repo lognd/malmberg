@@ -1820,10 +1820,14 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     <section>
       <h2>Upload</h2>
       <div id="dropzone">
-        <div>Drag and drop photos or videos here</div>
+        <div>Drag and drop photos, videos, or a whole folder here</div>
         <div class="hint">or</div>
         <button id="picker-btn" type="button">Choose files</button>
-        <input id="file-input" type="file" multiple accept="image/*,video/*">
+        <button id="folder-btn" type="button">Choose a folder</button>
+        <!-- No accept filter: macOS pickers grey out HEIC when one is set.
+             The server validates, and we filter by extension in JS. -->
+        <input id="file-input" type="file" multiple>
+        <input id="folder-input" type="file" multiple webkitdirectory>
       </div>
       <div id="upload-summary"></div>
       <div id="upload-list"></div>
@@ -2216,12 +2220,74 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
 
   var CONCURRENCY = 3;
 
+  var folderBtn = document.getElementById("folder-btn");
+  var folderInput = document.getElementById("folder-input");
+
+  // Only these are worth POSTing; keeps .DS_Store / sidecars out of a folder
+  // drop and gives a clear message when a selection has no media at all.
+  var MEDIA_RE =
+    /\\.(jpe?g|png|heic|heif|avif|tiff?|webp|gif|bmp|mp4|mov|m4v|avi|mkv|webm)$/i;
+
   picker.addEventListener("click", function () { input.click(); });
+  folderBtn.addEventListener("click", function () { folderInput.click(); });
 
   input.addEventListener("change", function () {
     handleFiles(input.files);
     input.value = "";
   });
+
+  folderInput.addEventListener("change", function () {
+    handleFiles(folderInput.files);
+    folderInput.value = "";
+  });
+
+  /* Dropping a FOLDER hands us directory entries, not files -- dataTransfer
+     .files is empty, which is why a folder drop used to do nothing at all.
+     Walk the entry tree and collect the real files. */
+  function filesFromDrop(dt) {
+    var items = dt.items;
+    var plain = Array.prototype.slice.call(dt.files || []);
+    if (!items || !items.length || !items[0].webkitGetAsEntry) {
+      return Promise.resolve(plain);
+    }
+    var roots = [];
+    for (var i = 0; i < items.length; i++) {
+      var entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+      if (entry) roots.push(entry);
+    }
+    if (!roots.length) return Promise.resolve(plain);
+
+    var out = [];
+    function walk(entry) {
+      return new Promise(function (resolve) {
+        if (entry.isFile) {
+          entry.file(
+            function (f) { out.push(f); resolve(); },
+            function () { resolve(); }
+          );
+        } else if (entry.isDirectory) {
+          var reader = entry.createReader();
+          var seen = [];
+          (function readMore() {
+            reader.readEntries(
+              function (batch) {
+                if (!batch.length) {
+                  Promise.all(seen.map(walk)).then(function () { resolve(); });
+                  return;
+                }
+                seen = seen.concat(Array.prototype.slice.call(batch));
+                readMore();
+              },
+              function () { resolve(); }
+            );
+          })();
+        } else {
+          resolve();
+        }
+      });
+    }
+    return Promise.all(roots.map(walk)).then(function () { return out; });
+  }
 
   ["dragenter", "dragover"].forEach(function (evt) {
     dropzone.addEventListener(evt, function (e) {
@@ -2236,14 +2302,26 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     });
   });
   dropzone.addEventListener("drop", function (e) {
-    if (e.dataTransfer && e.dataTransfer.files) {
-      handleFiles(e.dataTransfer.files);
-    }
+    if (!e.dataTransfer) return;
+    filesFromDrop(e.dataTransfer).then(function (files) {
+      handleFiles(files);
+    });
   });
 
   function handleFiles(fileList) {
-    var files = Array.prototype.slice.call(fileList);
-    if (files.length === 0) return;
+    var all = Array.prototype.slice.call(fileList);
+    var files = all.filter(function (f) { return MEDIA_RE.test(f.name); });
+    if (files.length === 0) {
+      // Never fail silently: this used to just return, so a folder drop or a
+      // selection of non-media looked like the button did nothing.
+      showToast(
+        all.length
+          ? "No photos or videos in that selection."
+          : "Nothing to upload. Try 'Choose a folder'.",
+        "err"
+      );
+      return;
+    }
 
     uploadSummary.className = "show";
     uploadSummary.textContent = "Uploading 0 / " + files.length + "...";
