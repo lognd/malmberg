@@ -193,8 +193,13 @@ def main() -> int:
         argfile = f.name
 
     print("\nWriting EXIF with exiftool (this can take a while)...")
+    # -m: Google re-encodes some photos but keeps the original extension, so a
+    # file named .HEIC can hold JPEG bytes.  Without -m exiftool calls that a
+    # fatal "Not a valid HEIC" and writes NOTHING to the file, silently leaving
+    # it with no date and no GPS.  -m demotes it to a warning and writes using
+    # the format actually detected.
     proc = subprocess.run(
-        ["exiftool", "-@", argfile, "-common_args", "-charset", "filename=utf8"],
+        ["exiftool", "-m", "-@", argfile, "-common_args", "-charset", "filename=utf8"],
         check=False,
     )
     Path(argfile).unlink(missing_ok=True)
