@@ -365,3 +365,19 @@ def test_server_producer_caps_cache_to_a_handful_of_items(tmp_path: Path) -> Non
     assert len(left) == 3, f"expected 3 cached photos, got {len(left)}"
     assert made[-1] in left, "just-downloaded photo must survive"
     assert made[0] not in left, "oldest photo should be evicted first"
+
+
+async def test_cached_item_skips_instead_of_crashing_when_fetch_fails() -> None:
+    """A failed download must skip the frame, not kill the display task.
+
+    display() used to raise RuntimeError when there was no delegate, which
+    took the whole frame down over a single unavailable photo.
+    """
+    from malmberg_display.display.proto import DisplayContext
+
+    async def failing_fetch() -> bool:
+        return False
+
+    item = CachedItem(Path("/nope/missing.jpg"), "id1", fetch=failing_fetch)
+    await item.load(LoadContext())
+    await item.display(DisplayContext())  # must not raise

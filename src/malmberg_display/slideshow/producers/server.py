@@ -85,8 +85,16 @@ class CachedItem(Displayable):
         self._delegate = d
 
     async def display(self, ctx: DisplayContext) -> None:
+        """Show the item, or skip it if it could not be fetched/decoded.
+
+        A failed download (transient network blip, a file the server cannot
+        serve) leaves no delegate.  Skip that frame and let the slideshow move
+        on -- raising here would kill the display task and take the whole frame
+        down over one bad photo.
+        """
         if self._delegate is None:
-            raise RuntimeError("CachedItem.load() must be called before display()")
+            _log.warning("Skipping %s: not available to display", self._path.name)
+            return
         await self._delegate.display(ctx)
 
 
