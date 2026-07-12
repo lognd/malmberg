@@ -49,6 +49,25 @@ fi
 
 SERVER="${SERVER%/}"
 
+# A .photoslibrary is a PACKAGE, not a plain folder: alongside the originals it
+# holds derivatives/thumbnails and a database.  Uploading the whole bundle would
+# import low-quality duplicates (different bytes, so content-dedup cannot catch
+# them).  Narrow to the originals, which keep their EXIF.
+case "$DIR" in
+  *.photoslibrary|*.photoslibrary/)
+    for sub in originals Masters; do
+      if [ -d "$DIR/$sub" ]; then
+        echo "note: $DIR is a Photos library package."
+        echo "      Using only its '$sub/' folder (the true originals);"
+        echo "      derivatives/thumbnails inside the bundle are skipped."
+        echo "      Quit Photos.app first. Originals only -- edits are not included."
+        DIR="$DIR/$sub"
+        break
+      fi
+    done
+    ;;
+esac
+
 # Fail fast if the server is not reachable, rather than 500 curl errors.
 if ! curl -fsS -m 10 -o /dev/null "$SERVER/status"; then
   echo "error: cannot reach Malmberg server at $SERVER" >&2

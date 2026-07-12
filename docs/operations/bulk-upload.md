@@ -5,15 +5,39 @@ the server. The server de-duplicates by content (SHA-256), so a file it already
 has is reported as "already there" and skipped -- the script is safe to
 interrupt and re-run.
 
-## Export from Photos.app first
+## Getting photos out of Photos.app
 
-Do NOT point the script at the `.photoslibrary` bundle. Export the originals:
+Never drag the `.photoslibrary` bundle onto the dashboard drop zone. It is a
+package: besides the originals it holds derivatives/thumbnails and a database.
+Those derivatives are different bytes, so content-dedup cannot catch them and
+you would import low-quality duplicates.
 
-    Photos.app > select photos > File > Export > Export Unmodified Original...
+### Option 1 -- Export (safest; keeps your edits)
 
-"Export Unmodified Original" keeps the EXIF (GPS + capture date). The plain
-"Export" re-encodes and can strip or rewrite that metadata, which Malmberg uses
-for the place and time search, and for the by-year / by-month / by-place stats.
+If you use iCloud Photos, first set Photos > Settings > iCloud >
+**Download Originals to this Mac** and let it finish. With "Optimize Mac
+Storage" on, many originals are not actually on disk.
+
+    Photos.app > Edit > Select All > File > Export >
+      Export Unmodified Original For N Photos...
+      Subfolder Format: None    File Naming: Use File Name
+
+**Export Unmodified Original** keeps the EXIF (GPS + capture date). The plain
+"Export..." re-encodes and can strip or rewrite that metadata, which Malmberg
+uses for place/time search and the by-year / by-month / by-place stats.
+Needs roughly as much free disk as the library.
+
+### Option 2 -- Upload the originals in place (no export, no extra disk)
+
+Quit Photos.app, then point the script at the library. It detects the bundle
+and narrows to its `originals/` folder automatically, skipping derivatives and
+the database:
+
+    ./scripts/upload_from_mac.sh -n "$HOME/Pictures/Photos Library.photoslibrary"
+
+Filenames there are UUIDs, which is fine -- Malmberg reads date/place from EXIF
+and dedups by content. Caveat: this gives ORIGINALS ONLY (not your edits), and
+Live Photos bring a paired .mov.
 
 Photos with no EXIF date or GPS (scans, old cameras) can still be tagged by
 hand afterwards from the dashboard (per photo, or in bulk from the select bar).
