@@ -18,6 +18,11 @@ class LoadContext(BaseModel):
     """Directory for caching downloaded or transcoded media."""
     geocoder: Optional[Any] = None
     """Optional (lat, lon) -> str callable for reverse-geocoding GPS coordinates."""
+    screen_width: int = 1920
+    screen_height: int = 1080
+    """Size of the frame to pre-compose during load(), so display() is only a
+    blit.  Scaling/blurring a full-resolution photo at display time stalled the
+    event loop for hundreds of ms and made the swap visibly hitch."""
 
 
 class DisplayContext(BaseModel):

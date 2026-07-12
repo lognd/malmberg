@@ -73,16 +73,25 @@ class DisplayApp:
         overlay_renderer = OverlayRenderer(overlay_cfg)
         geocoder = make_geocoder()
 
-        load_ctx = LoadContext(cache_dir=cache_dir, geocoder=geocoder)
         screen = self._init_screen()
+        # Open the screen first: load() pre-composes each frame at the real
+        # screen size, so it has to know that size before any item is loaded.
+        width = screen.get_width() if screen is not None else self._cfg.width
+        height = screen.get_height() if screen is not None else self._cfg.height
+        load_ctx = LoadContext(
+            cache_dir=cache_dir,
+            geocoder=geocoder,
+            screen_width=width,
+            screen_height=height,
+        )
         # One mpv player for the whole run, drawing INTO our pygame window.
         # A per-clip mpv window (the old behaviour) flashed the desktop every
         # time it was created and destroyed, and stuttered.
         mpv_player = make_player(self._window_id(screen), self._profile.hw_video_decode)
         display_ctx = DisplayContext(
             screen=screen,
-            width=screen.get_width() if screen is not None else self._cfg.width,
-            height=screen.get_height() if screen is not None else self._cfg.height,
+            width=width,
+            height=height,
             fade_duration_s=self._cfg.fade_duration_s,
             dwell_s=self._cfg.dwell_s,
             show_clock=self._cfg.show_clock,

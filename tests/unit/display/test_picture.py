@@ -72,15 +72,14 @@ def test_decode_undecodable_returns_none(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_sets_surface_none_on_bad_file(tmp_path: Path) -> None:
-    """load() on an undecodable file leaves the surface None instead of raising."""
+async def test_load_sets_frame_none_on_bad_file(tmp_path: Path) -> None:
+    """load() on an undecodable file leaves the frame None instead of raising."""
     src = tmp_path / "garbage.jpg"
     src.write_bytes(b"not an image at all")
 
     display = PictureDisplay(src)
     await display.load(LoadContext())
-    assert display._surface is None
-    assert display._bg is None
+    assert display._frame is None
 
 
 @pytest.mark.asyncio
@@ -95,3 +94,47 @@ async def test_display_skips_gracefully_on_bad_file(tmp_path: Path) -> None:
     ctx = DisplayContext(screen=pygame.display.get_surface(), width=1, height=1)
     # Should return cleanly, not raise.
     await display.display(ctx)
+
+
+@pytest.mark.asyncio
+async def test_load_precomposes_frame_at_screen_size(tmp_path: Path) -> None:
+    """load() leaves a ready-to-blit, screen-sized frame so display() is just a swap."""
+    from PIL import Image
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (640, 480), (10, 120, 200)).save(src, "JPEG")
+
+    display = PictureDisplay(src)
+    await display.load(LoadContext(screen_width=800, screen_height=600))
+
+    assert display._frame is not None
+    assert display._frame.get_size() == (800, 600)
+
+
+@pytest.mark.asyncio
+async def test_display_releases_frame(tmp_path: Path) -> None:
+    """The composed frame is dropped once shown: history must not pin surfaces.
+
+    Retaining it per item is what exhausted the Pi's memory (32 history entries
+    x a full-screen surface each).
+    """
+    from PIL import Image
+
+    from malmberg_display.display.proto import DisplayContext
+
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (64, 48), (10, 120, 200)).save(src, "JPEG")
+
+    display = PictureDisplay(src)
+    await display.load(LoadContext(screen_width=1, screen_height=1))
+    assert display._frame is not None
+
+    ctx = DisplayContext(
+        screen=pygame.display.get_surface(),
+        width=1,
+        height=1,
+        fade_duration_s=0,
+        dwell_s=0,
+    )
+    await display.display(ctx)
+    assert display._frame is None
