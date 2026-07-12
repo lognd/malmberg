@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Sequence
@@ -89,6 +90,7 @@ class ServerProducer:
         cache_dir: Path,
         http_client: httpx.AsyncClient,
         item_ids: Optional[Sequence[str]] = None,
+        max_bytes: int = 4 * 1024 * 1024 * 1024,
     ) -> None:
         self._url = server_url.rstrip("/")
         self._cache_dir = cache_dir
@@ -96,6 +98,62 @@ class ServerProducer:
         # When set, play only these item ids in this order (a programmed
         # slideshow or a single "display this photo now"); otherwise play all.
         self._item_ids = list(item_ids) if item_ids is not None else None
+        # Hard cap on the on-disk cache. Without this the cache grows to the
+        # size of the entire library and fills the Pi's card, after which no
+        # photo can be downloaded and the frame goes dark.
+        self._max_bytes = max_bytes
+
+    def _enforce_cache_limit(self, keep: Path) -> None:
+        """Evict least-recently-used cached files until under ``max_bytes``.
+
+        *keep* is the file just downloaded; it is never evicted.  Recency is
+        the file mtime, which ``_item_from_raw`` refreshes on every cache hit,
+        so files still in rotation survive and stale ones (including cache
+        dirs orphaned by a server-side rotate) are reclaimed first.
+        """
+        if self._max_bytes <= 0:
+            return
+        entries: list[tuple[float, int, Path]] = []
+        total = 0
+        for path in self._cache_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append((stat.st_mtime, stat.st_size, path))
+            total += stat.st_size
+        if total <= self._max_bytes:
+            return
+
+        entries.sort(key=lambda e: e[0])  # least recently used first
+        freed = 0
+        for _mtime, size, path in entries:
+            if total - freed <= self._max_bytes:
+                break
+            if path == keep:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            freed += size
+        _log.info(
+            "Photo cache over %d bytes; evicted %d bytes of least-recently-used "
+            "files (cache is disposable, files re-download on demand)",
+            self._max_bytes,
+            freed,
+        )
+        # Drop the now-empty per-item / per-sha256 directories left behind.
+        for path in sorted(
+            self._cache_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True
+        ):
+            if path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
 
     async def items(self) -> AsyncGenerator[CachedItem, None]:
         """Yield CachedItems -- either the whole library or a specific id list."""
@@ -183,10 +241,18 @@ class ServerProducer:
         digest = meta.get("sha256") or ""
         cache_key = digest[:12] if digest else "nosha"
         cached = self._cache_dir / item_id / cache_key / filename
-        if not cached.is_file():
+        if cached.is_file():
+            # Cache hit: bump mtime so this file counts as recently used and
+            # survives LRU eviction while it is still in rotation.
+            try:
+                os.utime(cached, None)
+            except OSError:
+                pass
+        else:
             ok = await self._download(item_id, filename, cached)
             if not ok:
                 return None
+            self._enforce_cache_limit(keep=cached)
         # effective_taken_at/effective_lat/effective_lon (computed server-side
         # from MediaMetadata) prefer a manual override over raw EXIF, so a
         # manually-dated/-located photo shows the right caption on the frame

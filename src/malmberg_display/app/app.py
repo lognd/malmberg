@@ -117,7 +117,11 @@ class DisplayApp:
 
                 def factory() -> AsyncIterator[Displayable]:
                     return ServerProducer(
-                        url, cache_dir, client, item_ids=item_ids
+                        url,
+                        cache_dir,
+                        client,
+                        item_ids=item_ids,
+                        max_bytes=self._cfg.cache_max_bytes,
                     ).items()
 
                 if loop:
@@ -270,8 +274,11 @@ class DisplayApp:
             assert self._http_client is not None
             client = self._http_client
             _log.info("Using server producer: %s", server_url)
+            max_bytes = self._cfg.cache_max_bytes
             return async_load_infinite(
-                lambda: ServerProducer(server_url, cache_dir, client).items()
+                lambda: ServerProducer(
+                    server_url, cache_dir, client, max_bytes=max_bytes
+                ).items()
             )
 
         _log.warning(
@@ -301,9 +308,12 @@ class DisplayApp:
             # since make_server_producer reads self._cfg.server_url and it was
             # never set here.
             self._cfg.server_url = server_url
+            cap = self._cfg.cache_max_bytes
             slideshow.set_producer(
                 async_load_infinite(
-                    lambda: ServerProducer(server_url, cache_dir, client).items()
+                    lambda: ServerProducer(
+                        server_url, cache_dir, client, max_bytes=cap
+                    ).items()
                 )
             )
             stop.set()

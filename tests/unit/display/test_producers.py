@@ -286,3 +286,40 @@ async def test_server_producer_selected_ids_survive_one_failure(
     assert [i.item_id for i in items] == ["b"], (
         "a transient failure resolving id 'a' incorrectly dropped id 'b' too"
     )
+
+
+def test_server_producer_evicts_lru_when_cache_over_cap(tmp_path: Path) -> None:
+    """The photo cache must stay under its byte cap.
+
+    Unbounded, it grows to the size of the whole library and fills the Pi's
+    card, after which nothing downloads and the frame goes dark (this actually
+    happened). Least-recently-used files are evicted; the just-downloaded file
+    and recently-touched files survive.
+    """
+    import os
+
+    import httpx
+
+    from malmberg_display.slideshow.producers.server import ServerProducer
+
+    cache = tmp_path / "cache"
+    # Three 1 KiB stragglers, oldest first by mtime.
+    old = []
+    for i in range(3):
+        p = cache / f"old{i}" / "k" / f"o{i}.jpg"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x" * 1024)
+        os.utime(p, (1000 + i, 1000 + i))
+        old.append(p)
+
+    keep = cache / "new" / "k" / "n.jpg"
+    keep.parent.mkdir(parents=True)
+    keep.write_bytes(b"y" * 1024)
+
+    prod = ServerProducer("http://x", cache, httpx.AsyncClient(), max_bytes=2048)
+    prod._enforce_cache_limit(keep=keep)
+
+    total = sum(p.stat().st_size for p in cache.rglob("*") if p.is_file())
+    assert total <= 2048, "cache still over cap after eviction"
+    assert keep.is_file(), "just-downloaded file must never be evicted"
+    assert not old[0].is_file(), "least-recently-used file should be evicted first"

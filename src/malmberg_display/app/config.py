@@ -32,6 +32,15 @@ class DisplayConfig(BaseModel):
     """Enable playwright-based web overlays (requires playwright_supported HAL flag)."""
     offline_cache_size: int = 500
     """Maximum number of items to keep in the offline LRU cache."""
+    cache_max_bytes: int = 4 * 1024 * 1024 * 1024
+    """Cap on the on-disk photo cache, in bytes (default 4 GiB).
+
+    The display keeps a copy of every photo it downloads.  Left unbounded this
+    grows to the size of the whole library and fills the Pi's card, at which
+    point nothing can be downloaded and the frame goes dark.  Once the cache
+    exceeds this, least-recently-used files are evicted.  Set to 0 to disable
+    the cap (not advised on a Pi).
+    """
     width: int = 1920
     height: int = 1080
     media_dir: Optional[Path] = None
