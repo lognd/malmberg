@@ -1283,7 +1283,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     background: var(--bg-alt);
     display: block;
   }
-  .tile .select-mark {
+  /* The mark exists on every tile and is shown by CSS only in select mode, so
+     entering select mode and ticking photos never rebuild the grid (rebuilding
+     re-creates every <img>, which makes the whole grid visibly reload). */
+  .tile .select-mark { display: none; }
+  #grid.select-mode .tile .select-mark {
     position: absolute;
     top: 4px;
     left: 4px;
@@ -1299,7 +1303,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     font-size: 0.95rem;
     font-weight: 700;
   }
-  .tile.selected .select-mark {
+  #grid.select-mode .tile.selected .select-mark::after { content: "\\2713"; }
+  #grid.select-mode .tile.selected .select-mark {
     background: var(--aqua);
     border-color: var(--aqua);
     color: #282828;
@@ -3160,6 +3165,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     page: 1, q: "", qTime: "", qPlace: "", qPerson: "",
     hasNext: false, total: 0, items: [],
     selectMode: false, selected: {},
+    // itemId -> tile element, so a selection change can repaint one tile
+    // instead of re-rendering (and re-downloading) the entire grid.
+    tileById: {},
   };
   var searchDebounce = null;
 
@@ -3189,6 +3197,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (!state.selectMode) bulkPlaylistPicker.innerHTML = "";
   }
 
+  /* Selection changes must NOT call renderGrid(): it clears the grid and
+     re-creates every <img>, so the browser re-decodes and re-lays-out the whole
+     page on each click and the photos visibly reload. Flip a class on the one
+     tile instead -- the mark itself is drawn by CSS. */
+  function paintTileSelection(itemId) {
+    var tile = state.tileById[itemId];
+    if (tile) tile.classList.toggle("selected", !!state.selected[itemId]);
+  }
+
+  function repaintAllSelections() {
+    Object.keys(state.tileById).forEach(paintTileSelection);
+  }
+
   function toggleSelectMode() {
     state.selectMode = !state.selectMode;
     selectToggleBtn.className = state.selectMode ? "active" : "";
@@ -3196,8 +3217,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     if (!state.selectMode) {
       state.selected = {};
     }
+    grid.classList.toggle("select-mode", state.selectMode);
     updateBulkBar();
-    renderGrid();
+    repaintAllSelections();
   }
 
   function toggleItemSelected(itemId) {
@@ -3207,33 +3229,35 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       state.selected[itemId] = true;
     }
     updateBulkBar();
-    renderGrid();
+    paintTileSelection(itemId);
   }
 
   selectToggleBtn.addEventListener("click", toggleSelectMode);
   bulkClear.addEventListener("click", function () {
     state.selected = {};
     updateBulkBar();
-    renderGrid();
+    repaintAllSelections();
   });
   bulkSelectAll.addEventListener("click", function () {
     state.items.forEach(function (item) { state.selected[item.id] = true; });
     updateBulkBar();
-    renderGrid();
+    repaintAllSelections();
   });
 
   function renderGrid() {
     grid.innerHTML = "";
+    state.tileById = {};
+    grid.classList.toggle("select-mode", state.selectMode);
     state.items.forEach(function (item) {
       var tile = document.createElement("div");
-      var selected = !!state.selected[item.id];
-      tile.className = "tile" + (selected ? " selected" : "");
+      tile.className = "tile" + (state.selected[item.id] ? " selected" : "");
 
       var img = document.createElement("img");
       var gridV = mediaVersionParam(item);
       img.src = "/media/" + item.id + "/thumb" + (gridV ? "?" + gridV : "");
       img.alt = item.filename;
       img.loading = "lazy";
+      img.decoding = "async";
       tile.appendChild(img);
 
       if (item.kind === "video") {
@@ -3242,33 +3266,33 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         tile.appendChild(badge);
       }
 
-      if (state.selectMode) {
-        var mark = document.createElement("div");
-        mark.className = "select-mark";
-        mark.textContent = selected ? "\\u2713" : "";
-        tile.appendChild(mark);
-        tile.addEventListener("click", function () {
-          if (consumeLongPressSuppression()) return;
+      // Always present; CSS hides it outside select mode. The tick is drawn by
+      // CSS from .selected, so toggling selection never touches this element.
+      var mark = document.createElement("div");
+      mark.className = "select-mark";
+      tile.appendChild(mark);
+
+      // One handler that branches on the CURRENT mode, so switching modes does
+      // not require rebuilding tiles to swap handlers.
+      tile.addEventListener("click", function () {
+        if (consumeLongPressSuppression()) return;
+        if (state.selectMode) {
           toggleItemSelected(item.id);
-        });
-      } else {
-        tile.addEventListener("click", function () {
-          if (consumeLongPressSuppression()) return;
+        } else {
           openModal(item.id);
-        });
-      }
+        }
+      });
 
       attachLongPress(tile, item);
+      state.tileById[item.id] = tile;
       grid.appendChild(tile);
     });
   }
 
   /* ---- Long-press to enter bulk-select (touch and mouse) ----
-     A long-press re-renders the grid mid-gesture (to show the selection
-     mark), which replaces the tile element before the browser's follow-up
-     "click" fires. That click then lands on the freshly-rendered tile in
-     the same spot, so a single shared flag (not a per-tile closure) is
-     used to swallow exactly that one click, wherever it lands. */
+     The browser fires a "click" after the long-press completes; without
+     suppression that click would immediately toggle the item back off (or open
+     the lightbox). A single shared flag swallows exactly that one click. */
   var LONG_PRESS_MS = 500;
   var LONG_PRESS_MOVE_TOLERANCE = 12;
   var suppressNextTileClick = false;
