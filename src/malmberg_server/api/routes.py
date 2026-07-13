@@ -51,6 +51,7 @@ from malmberg_server.ingest.media import (
 )
 from malmberg_server.ingest.playlists import PlaylistStore
 from malmberg_server.ingest.store import MediaStore
+from malmberg_server.ingest.thumbs import run_thumb_worker, thumb_path
 from malmberg_server.ingest.upload import handle_upload
 from malmberg_server.version import VersionInfo, collect_version_info
 
@@ -379,6 +380,15 @@ def build_app(
                 _faces_path(),
             )
         )
+
+    @app.on_event("startup")
+    async def _start_thumb_worker() -> None:
+        """Kick off the background thumbnail warmer (see ingest.thumbs).
+
+        Keeps the browse grid's thumbnails on disk ahead of the user, so paging
+        never pays for a full-resolution decode on the request path.
+        """
+        asyncio.create_task(run_thumb_worker(_store, cfg.fs_root, _media_root()))
 
     @app.on_event("startup")
     async def _start_cloud_sync_worker() -> None:
@@ -718,17 +728,15 @@ def build_app(
         item = _store.get(item_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Media item not found")
-        thumb_path = cfg.fs_root / ".thumbs" / f"{item_id}_{size}.jpg"
-        if not thumb_path.is_file():
+        dest = thumb_path(cfg.fs_root, item_id, size)
+        if not dest.is_file():
             src = _item_file_root(item) / item.server_path
             if not src.is_file():
                 raise HTTPException(status_code=404, detail="File not found on disk")
-            result = make_thumbnail(
-                src, thumb_path, size, is_video=item.kind == "video"
-            )
+            result = make_thumbnail(src, dest, size, is_video=item.kind == "video")
             if result.is_err:
                 _raise_ingest(result.danger_err)
-        return FileResponse(str(thumb_path), media_type="image/jpeg")
+        return FileResponse(str(dest), media_type="image/jpeg")
 
     @app.get("/upload")
     async def upload_page() -> RedirectResponse:

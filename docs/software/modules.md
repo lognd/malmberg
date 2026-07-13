@@ -183,6 +183,12 @@ from malmberg_server.ingest import (
   `extract_exif`, moves to `media_root/YYYY/MM/DD/filename`, calls `store.add`.
 - `sha256_of_file(path) -> str` -- returns the hex digest; raises `OSError` on
   missing file.
+- `thumbs.run_thumb_worker(store, fs_root, media_root)` -- background asyncio
+  task that pre-generates the browse-grid thumbnail sizes (`thumbs.WARM_SIZES`)
+  for every non-trashed item, so paging never pays for a full-resolution decode
+  on the request path. `thumbs.thumb_path(fs_root, item_id, size)` is the single
+  home of the `.thumbs/{id}_{size}.jpg` layout; `thumbs.missing_thumbs` lists
+  the gaps.
 
 ### `malmberg_server.backup`
 

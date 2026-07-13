@@ -1408,6 +1408,25 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     font-size: 0.82rem;
     color: var(--muted);
   }
+  /* Jumping straight to a page: 17k photos is ~700 pages, and stepping there
+     with Next is not a plan. */
+  .pagination .page-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0.6rem;
+  }
+  .pagination .page-jump label {
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .pagination .page-jump input {
+    width: 5rem;
+    min-height: 40px;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.85rem;
+    text-align: center;
+  }
   /* Bulk action bar */
   #bulk-bar {
     display: none;
@@ -2129,6 +2148,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <button id="page-prev" type="button">Previous</button>
         <span class="page-info" id="page-info"></span>
         <button id="page-next" type="button">Next</button>
+        <span class="page-jump">
+          <label for="page-jump-input">Go to page</label>
+          <input id="page-jump-input" type="number" min="1" step="1"
+                 inputmode="numeric" aria-label="Go to page number">
+          <button id="page-jump-btn" type="button">Go</button>
+        </span>
       </div>
     </section>
 
@@ -3225,6 +3250,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var bulkAddPlaylist = document.getElementById("bulk-add-playlist");
   var bulkPlaylistPicker = document.getElementById("bulk-playlist-picker");
 
+  var pageJumpInput = document.getElementById("page-jump-input");
+  var pageJumpBtn = document.getElementById("page-jump-btn");
+
   var PAGE_SIZE = 24;
   var state = {
     page: 1, q: "", qTime: "", qPlace: "", qPerson: "",
@@ -3425,13 +3453,43 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     tile.addEventListener("pointerleave", clearPressTimer);
   }
 
-  function loadGrid() {
-    var params = "page=" + state.page + "&page_size=" + PAGE_SIZE +
-      "&sort=recent";
+  /* Query string for one page of the current filter set -- shared by the
+     visible page and the prefetch, so the two can never drift apart. */
+  function gridParams(page) {
+    var params = "page=" + page + "&page_size=" + PAGE_SIZE + "&sort=recent";
     if (state.q) params += "&q=" + encodeURIComponent(state.q);
     if (state.qTime) params += "&q_time=" + encodeURIComponent(state.qTime);
     if (state.qPlace) params += "&q_place=" + encodeURIComponent(state.qPlace);
     if (state.qPerson) params += "&q_person=" + encodeURIComponent(state.qPerson);
+    return params;
+  }
+
+  /* Warm the browser cache with the NEXT page's thumbnails while the user is
+     still looking at this one, so pressing Next paints immediately. The
+     server-side thumb warmer (ingest/thumbs.py) is what makes this cheap:
+     these requests hit thumbnails already on disk instead of triggering a
+     full-resolution decode each. Best-effort -- a failed prefetch is silent
+     and simply means the real Next pays for it. */
+  var prefetched = {};
+  function prefetchNextPage() {
+    if (!state.hasNext) return;
+    var next = state.page + 1;
+    var key = gridParams(next);
+    if (prefetched[key]) return;
+    prefetched[key] = true;
+    fetch("/media?" + key)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        (data.items || []).forEach(function (item) {
+          var v = mediaVersionParam(item);
+          new Image().src = "/media/" + item.id + "/thumb" + (v ? "?" + v : "");
+        });
+      })
+      .catch(function () {});
+  }
+
+  function loadGrid() {
+    var params = gridParams(state.page);
 
     fetch("/media?" + params)
       .then(function (r) { return r.json(); })
@@ -3455,6 +3513,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         pageInfo.textContent = "Page " + state.page + " of " + totalPages();
         pagePrev.disabled = state.page <= 1;
         pageNext.disabled = !state.hasNext;
+        pageJumpInput.max = String(totalPages());
+        pageJumpInput.placeholder = "1-" + totalPages();
+        prefetchNextPage();
       })
       .catch(function () {
         grid.innerHTML = "<div>Could not load photos.</div>";
@@ -4072,6 +4133,27 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       state.page += 1;
       loadGrid();
     }
+  });
+
+  /* Jump straight to a page. Clamped to the real range rather than refused,
+     so typing 999 in a 700-page library lands on the last page instead of
+     erroring at someone who just wants to get to the end. */
+  function jumpToPage() {
+    var want = parseInt(pageJumpInput.value, 10);
+    if (isNaN(want)) { showToast("Type a page number first.", "err"); return; }
+    var last = totalPages();
+    var target = Math.min(Math.max(1, want), last);
+    if (target !== want) {
+      showToast("Jumped to page " + target + " (of " + last + ").", "ok");
+    }
+    pageJumpInput.value = "";
+    state.page = target;
+    loadGrid();
+    showResultsBelow();
+  }
+  pageJumpBtn.addEventListener("click", jumpToPage);
+  pageJumpInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") { ev.preventDefault(); jumpToPage(); }
   });
 
   /* ---- Bulk actions ---- */

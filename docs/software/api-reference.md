@@ -187,6 +187,26 @@ suggestions.
 
 ---
 
+### `DELETE /people/{person_id}`
+
+Delete a person group. **The photos are kept** -- only the grouping goes away,
+along with the face embeddings that formed it.
+
+Dropping the embeddings is not optional: `POST /people/recluster` rebuilds
+people from the face index, so a person whose faces survived the delete would
+simply reappear on the next recluster. Deleting them makes it stick.
+
+The one caveat: this is not permanent against a face-pipeline version bump.
+Raising `FACE_PROCESSING_VERSION` reprocesses each item from the photo itself,
+re-detecting the faces, so a deleted junk cluster can come back after a model
+or threshold upgrade. That is the honest trade for not touching the photos.
+
+**Response:** `{"status": "deleted", "person_id": "...", "faces": <count>}`
+
+**Errors:** `404` if the person does not exist.
+
+---
+
 ### `GET /people`
 
 List detected people (see "Face detection and search by person" below).
@@ -879,6 +899,33 @@ package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
 
 ---
 
+### Thumbnails and the background warmer
+
+`GET /media/{id}/thumb?size=` serves a cached JPEG thumbnail, generating it on
+first request. Generating one means a full-resolution decode of the original (a
+12 MP HEIC, or a video poster frame), which is far too slow to sit on the
+request path of whoever happens to turn the page first.
+
+So `malmberg_server.ingest.thumbs.run_thumb_worker` -- an asyncio background
+task started from the server's FastAPI startup event, alongside the face worker
+-- walks the library in small batches and writes the missing thumbnails ahead of
+the user, at the sizes the dashboard actually browses at (`WARM_SIZES`: 400 for
+the grid and face-review cards, 200 for the people cards and frame preview). The
+on-disk file *is* the state: an existing thumbnail is skipped, a deleted one is
+regenerated, trashed items are not warmed. Cheap to re-run, safe to interrupt.
+
+The larger sizes (the 1200 face zoom) stay lazy: they are opened one photo at a
+time, not a gridful at once, so warming them would cost a decode per item for a
+request that mostly never comes.
+
+Because the thumbnails are already on disk, the dashboard can afford to prefetch
+the *next* page's thumbnails while the user is still looking at the current one
+(`prefetchNextPage` in `api/web.py`), which is what makes paging feel instant.
+Paging also takes a "go to page N" jump box -- at 24 photos a page, a 17k-item
+library is ~700 pages and stepping there with Next is not a plan.
+
+---
+
 ### Face detection and search by person
 
 Faces are detected and clustered into people entirely server-side, entirely
@@ -933,10 +980,22 @@ offline, and entirely off the request path.
   to. This is also how a model or threshold change takes effect on the
   existing library, via the reprocess (`FACE_PROCESSING_VERSION`) + recluster
   self-heal path -- no manual step.
+- **Group photos land under every person in them.** Each detected face is
+  assigned independently, so a photo of three people is filed under all three:
+  `MediaItem.person_ids` collects every person found in it, each person's photo
+  count credits it, and searching by any one of them returns it. There is no
+  "primary" face.
 - **Manual overrides:** `POST /faces/{id}/reassign` moves or detaches a single
-  face; `POST /people/{id}/merge` merges two people. Both recompute the
-  affected people from the per-face index and re-project `person_ids` onto the
-  media items.
+  face; `POST /people/{id}/merge` merges two people; `DELETE /people/{id}`
+  removes a junk cluster outright (photos kept -- see that endpoint above). All
+  recompute the affected people from the per-face index and re-project
+  `person_ids` onto the media items.
+- **Acting on photos from review:** the dashboard's per-person review modal can
+  soft-delete a photo (`DELETE /media/{id}`) and open the standard item modal
+  (rotate / flip / tag / play) for any face card, so the junk found while
+  reviewing a person can be dealt with without leaving the modal. A trashed
+  photo is filtered out of `GET /people/{id}/photos`, keeping the review grid
+  and the person's displayed count in step.
 - Each `MediaItem` carries `person_ids: list[str]` (people detected in it),
   `faces_processed: bool`, and `faces_version: int`. These are plain fields
   with safe defaults, not part of `MediaMetadata`'s schema-refresh cycle --
