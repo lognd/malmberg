@@ -119,8 +119,8 @@ schema change never requires a manual re-ingest of existing files.
 | `page_size` | int | `50` | 1--500 | Items per page |
 | `sort` | str | `"id"` | `"id"` \| `"recent"` | `"recent"` orders newest first by `meta.taken_at`, falling back to `meta.ingest_at` |
 | `q` | str | none | -- | Filters to items whose `filename` contains *q* (case-insensitive), whose `meta.taken_at` year equals *q* when *q* is a 4-digit year, whose `meta.taken_at` year and month equal *q* when *q* is `YYYY-MM`, whose `meta.place` contains *q* (case-insensitive), or (for `/media`) a detected person's name contains *q* |
-| `q_time` | str | none | -- | Filters to items whose `meta.taken_at` matches a 4-digit year or `YYYY-MM` |
-| `q_place` | str | none | -- | Filters to items whose `meta.place` contains *q_place* (case-insensitive) |
+| `q_time` | str | none | -- | Filters to items whose `meta.taken_at` matches a 4-digit year or `YYYY-MM`; the literal `unsorted` instead selects items with **no** date |
+| `q_place` | str | none | -- | Filters to items whose `meta.place` contains *q_place* (case-insensitive); the literal `unsorted` instead selects items with **no** place |
 | `q_person` | str | none | -- | Filters to items with a detected person whose name contains *q_person* (case-insensitive) |
 
 `q_time`, `q_place`, and `q_person` are independent filters that combine with
@@ -131,6 +131,15 @@ dashboard's free-text search and by `POST /control/play-query`); the
 dashboard's Time/Place/Person boxes use `q_time`/`q_place`/`q_person` so they
 AND together instead of OR-matching a single combined box. See
 `MediaStore._matches_filters` in `ingest/store.py`.
+
+`q_time=unsorted` and `q_place=unsorted` (the `MediaStore.UNSORTED` sentinel,
+case-insensitive) select the items *missing* that field entirely -- no
+effective date, or no effective place. Screenshots, memes, and downloads
+carry neither, so they never appear under any year or place and would
+otherwise be unreachable through the breakdowns; `unsorted` is how the
+dashboard filters them out of (or down to) a working set. A manual date/place
+tag fills the effective field, so a tagged item stops being `unsorted`. Their
+counts are `undated` and `unplaced` in `GET /stats`.
 
 **Response: `MediaPage`**
 
@@ -620,8 +629,8 @@ Build a play set from a filter and show only those photos on the display
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `q` | str | none | Single free-text filter (OR across filename / year / month / place / person), same matcher as `GET /media?q=` |
-| `q_time` | str | none | Time filter: a 4-digit year or `YYYY-MM` against `meta.taken_at` |
-| `q_place` | str | none | Place substring (case-insensitive) against `meta.place` |
+| `q_time` | str | none | Time filter: a 4-digit year or `YYYY-MM` against `meta.taken_at`, or `unsorted` for items with no date |
+| `q_place` | str | none | Place substring (case-insensitive) against `meta.place`, or `unsorted` for items with no place |
 | `q_person` | str | none | Named-person substring against the item's detected people |
 | `loop` | bool | `false` | `false` plays the set once then returns to the whole library; `true` repeats until "play all" |
 
@@ -809,7 +818,7 @@ they replace `meta`.
 
 Every place in the server that answers "what is this photo's date/place"
 (search by year/month/place, `GET /stats`'s `by_year`/`by_month`/`by_place`/
-`undated`, `GET /places` autocomplete, and the `meta` served in `GET /media`
+`undated`/`unplaced`, `GET /places` autocomplete, and the `meta` served in `GET /media`
 that feeds the paired display's on-screen caption) reads the `effective_*`
 computed fields, not the raw EXIF fields, so a manually-tagged photo behaves
 identically to one with real EXIF everywhere in the app.
@@ -861,6 +870,12 @@ package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
   stays `null`.
 - `meta.place` feeds `GET /media?q=`, `GET /stats` (`by_place`), and
   `GET /places` (autocomplete) -- see those endpoints above.
+- The display reads the server's label as `meta.effective_place` and renders
+  it directly in the photo caption (`ServerProducer._item_from_raw` ->
+  `PictureDisplay` -> `ImageCaption.from_metadata`). Because the Pi has no
+  geocoder dataset of its own, this is the only source of a real place name on
+  the frame: without it the caption can only fall back to decimal
+  coordinates.
 
 ---
 

@@ -2370,7 +2370,19 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     return g;
   }
 
-  function renderTimeTree(byYear, byMonth) {
+  /* The sentinel q_time/q_place value that selects items missing that field
+     (MediaStore.UNSORTED). Screenshots and downloads mostly have neither a
+     date nor a location, so without this they are invisible in these
+     breakdowns and impossible to filter down to. */
+  var UNSORTED = 'unsorted';
+
+  function unsortedRow(count, label, pick) {
+    var row = leafRow();
+    row.appendChild(treeLeaf(label, count, true, function () { pick(UNSORTED); }));
+    return row;
+  }
+
+  function renderTimeTree(byYear, byMonth, undated) {
     var box = document.getElementById('by-time');
     box.innerHTML = '';
     var months = {};
@@ -2395,12 +2407,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       group.kids.appendChild(row);
       box.appendChild(group.node);
     });
-    if (!box.children.length) {
+    var years = box.children.length;
+    if (undated) {
+      box.appendChild(unsortedRow(undated, 'Unsorted (no date)', pickTime));
+    }
+    if (!years && !undated) {
       box.textContent = 'No dated photos yet.';
     }
   }
 
-  function renderPlaceTree(byPlace) {
+  function renderPlaceTree(byPlace, unplaced) {
     var box = document.getElementById('by-place');
     box.innerHTML = '';
     // Labels are 'City, Region, CC', but city-states come back as just
@@ -2476,7 +2492,11 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         if (grid.children.length) cNode.kids.appendChild(grid);
         box.appendChild(cNode.node);
       });
-    if (!box.children.length) {
+    var countries = box.children.length;
+    if (unplaced) {
+      box.appendChild(unsortedRow(unplaced, 'Unsorted (no location)', pickPlace));
+    }
+    if (!countries && !unplaced) {
       box.textContent = 'No located photos yet.';
     }
   }
@@ -2508,6 +2528,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           ["Photos", data.images],
           ["Videos", data.videos],
           ["Undated", data.undated],
+          ["Unplaced", data.unplaced],
           ["Earliest", data.earliest ? data.earliest.slice(0, 10) : "--"],
           ["Latest", data.latest ? data.latest.slice(0, 10) : "--"],
         ];
@@ -2520,8 +2541,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
           tile.querySelector(".k").textContent = pair[0];
           statsGrid.appendChild(tile);
         });
-        renderTimeTree(data.by_year || {}, data.by_month || {});
-        renderPlaceTree(data.by_place || {});
+        renderTimeTree(data.by_year || {}, data.by_month || {}, data.undated || 0);
+        renderPlaceTree(data.by_place || {}, data.unplaced || 0);
         byPerson.innerHTML = "";
         var byPersonData = data.by_person || {};
         Object.keys(byPersonData).forEach(function (name) {

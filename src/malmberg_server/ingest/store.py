@@ -16,6 +16,12 @@ from malmberg_server.ingest.media import META_SCHEMA_VERSION, extract_exif
 
 _log = get_logger(__name__)
 
+UNSORTED = "unsorted"
+"""Sentinel value for the ``q_time`` / ``q_place`` filters meaning "the field
+is empty": items with no effective date, or no effective place. Lets the
+dashboard surface the screenshots and other undated/unlocated junk that would
+otherwise be invisible in the by-year and by-place breakdowns."""
+
 
 class MediaStore:
     """Thread-safe (single-process) media index backed by a JSON-lines file.
@@ -231,7 +237,9 @@ class MediaStore:
         an item must match every provided filter. *q_time* matches a
         4-digit year or ``YYYY-MM`` against ``meta.taken_at``; *q_place* is
         a case-insensitive substring of ``meta.place``; *q_person* matches a
-        person name (via *people*) present on the item.
+        person name (via *people*) present on the item. *q_time* or *q_place*
+        set to ``UNSORTED`` instead selects the items missing that field
+        entirely.
         """
         all_items = [
             it
@@ -385,7 +393,9 @@ class MediaStore:
         """Summarize the library: counts by kind, taken_at date range, by-year.
 
         Returns a dict with keys ``total``, ``images``, ``videos``,
-        ``undated`` (items with no ``meta.taken_at``), ``earliest``,
+        ``undated`` (items with no ``meta.taken_at``), ``unplaced`` (items
+        with no ``meta.place``; both are the counts behind the ``unsorted``
+        q_time / q_place filters), ``earliest``,
         ``latest`` (ISO-8601 strings or None), ``by_year`` (a dict of
         4-digit year string -> count) and ``by_month`` (a dict of
         ``YYYY-MM`` string -> count), both for dated items only, and
@@ -415,16 +425,20 @@ class MediaStore:
             month = f"{dt.year:04d}-{dt.month:02d}"
             by_month[month] = by_month.get(month, 0) + 1
         by_place: dict[str, int] = {}
+        unplaced = 0
         for it in items:
             if it.meta.effective_place:
                 by_place[it.meta.effective_place] = (
                     by_place.get(it.meta.effective_place, 0) + 1
                 )
+            else:
+                unplaced += 1
         result = {
             "total": len(items),
             "images": images,
             "videos": videos,
             "undated": undated,
+            "unplaced": unplaced,
             "earliest": min(dated).isoformat() if dated else None,
             "latest": max(dated).isoformat() if dated else None,
             "by_year": dict(sorted(by_year.items())),
@@ -501,9 +515,11 @@ class MediaStore:
     @staticmethod
     def _matches_time(item: MediaItem, q_time: str) -> bool:
         """Return True if ``meta.effective_taken_at`` matches a 4-digit year
-        or ``YYYY-MM``."""
+        or ``YYYY-MM``, or is absent when *q_time* is ``UNSORTED``."""
         needle = q_time.strip().lower()
         taken_at = item.meta.effective_taken_at
+        if needle == UNSORTED:
+            return taken_at is None
         if taken_at is None:
             return False
         if len(needle) == 4 and needle.isdigit():
@@ -538,7 +554,10 @@ class MediaStore:
         if q_place:
             needle = q_place.strip().lower()
             place = item.meta.effective_place
-            if place is None or needle not in place.lower():
+            if needle == UNSORTED:
+                if place is not None:
+                    return False
+            elif place is None or needle not in place.lower():
                 return False
         if q_person:
             needle = q_person.strip().lower()

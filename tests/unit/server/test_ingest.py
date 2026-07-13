@@ -326,6 +326,58 @@ def test_store_and_filters_time_and_place() -> None:
     assert s.list(q_time="2006", q_place="Nowhere").total == 0
 
 
+def test_store_unsorted_filters() -> None:
+    """q_time/q_place='unsorted' selects exactly the items missing that field."""
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="dated_placed.jpg",
+            server_path="p/a.jpg",
+            meta=MediaMetadata(
+                sha256="h1", taken_at=datetime(2006, 7, 4), place="Tampa, FL"
+            ),
+        )
+    )
+    s.add(  # a screenshot: no EXIF date, no GPS
+        _make_item(
+            filename="screenshot.png",
+            server_path="p/b.png",
+            meta=MediaMetadata(sha256="h2"),
+        )
+    )
+    s.add(  # dated but never located
+        _make_item(
+            filename="dated_only.jpg",
+            server_path="p/c.jpg",
+            meta=MediaMetadata(sha256="h3", taken_at=datetime(2010, 1, 1)),
+        )
+    )
+
+    undated = s.list(q_time="unsorted")
+    assert [it.filename for it in undated.items] == ["screenshot.png"]
+
+    unplaced = s.list(q_place="unsorted")
+    assert sorted(it.filename for it in unplaced.items) == [
+        "dated_only.jpg",
+        "screenshot.png",
+    ]
+
+    # AND'd with each other, and case-insensitive.
+    both = s.list(q_time="UNSORTED", q_place="unsorted")
+    assert [it.filename for it in both.items] == ["screenshot.png"]
+
+    # A manual override counts as sorted: it fills the effective_* field.
+    item = next(i for i in s.list().items if i.filename == "screenshot.png")
+    s.patch(item.id, {"meta": item.meta.model_copy(update={"manual_place": "Home"})})
+    assert [it.filename for it in s.list(q_place="unsorted").items] == [
+        "dated_only.jpg"
+    ]
+
+    stats = s.stats()
+    assert stats["undated"] == 1
+    assert stats["unplaced"] == 1
+
+
 def test_store_patch_not_found() -> None:
     s = MediaStore()
     result = s.patch("nonexistent", {"do_not_display": True})
