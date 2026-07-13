@@ -354,6 +354,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   }
   .tree-leaf {
     min-height: 38px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
     text-align: left;
     padding: 0.3rem 0.6rem;
     font-size: 0.85rem;
@@ -362,10 +366,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     background: var(--bg);
     color: var(--text);
     cursor: pointer;
-    white-space: nowrap;
   }
   .tree-leaf.tn-all {
-    display: block;
     width: auto;
     border-color: transparent;
     background: none;
@@ -1241,10 +1243,16 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     background: var(--aqua);
     border-color: var(--aqua);
   }
+  #results-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 1.1rem;
+    margin-bottom: 0.6rem;
+  }
   #results-summary {
     font-size: 0.82rem;
     color: var(--muted);
-    margin-bottom: 0.6rem;
   }
   #restart-row {
     margin-top: 1.1rem;
@@ -1326,6 +1334,50 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     border: 1px solid var(--border);
     background: var(--bg-alt);
     display: block;
+    opacity: 0;
+    transition: opacity 0.18s ease-in;
+  }
+  .tile img.ready { opacity: 1; }
+  /* Loading feedback. A page turn puts the grid's shape on screen immediately
+     -- shimmering placeholders, then each photo fading in as it decodes -- so
+     the click never looks like it did nothing. A thumbnail already in the
+     browser's cache is .ready on the spot and never shimmers. */
+  .tile.loading::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: linear-gradient(
+      100deg, var(--bg-alt) 30%, var(--panel) 50%, var(--bg-alt) 70%);
+    background-size: 200% 100%;
+    animation: tile-shimmer 1.1s linear infinite;
+  }
+  .tile.skeleton { aspect-ratio: 1 / 1; }
+  @keyframes tile-shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  #grid-spinner {
+    width: 0.85rem;
+    height: 0.85rem;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid var(--panel);
+    border-top-color: var(--accent);
+    animation: spin 0.7s linear infinite;
+    /* Delayed fade-in: most page turns now answer in a few ms, and a spinner
+       that flashes for one frame reads as a glitch. This one only shows up
+       when the wait is long enough to actually notice. */
+    opacity: 0;
+    transition: opacity 0.12s ease 0.12s;
+  }
+  #grid-spinner:not(.on) { animation: none; }
+  #grid-spinner.on { opacity: 1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .tile.loading::before, #grid-spinner { animation: none; }
+    .tile img { transition: none; }
   }
   /* The mark exists on every tile and is shown by CSS only in select mode, so
      entering select mode and ticking photos never rebuild the grid (rebuilding
@@ -2109,7 +2161,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         <button id="refresh-btn" type="button">Refresh</button>
         <button id="select-toggle-btn" type="button">Bulk Select</button>
       </div>
-      <div id="results-summary"></div>
+      <div id="results-row">
+        <span id="grid-spinner" aria-hidden="true"></span>
+        <div id="results-summary"></div>
+      </div>
       <div id="bulk-bar">
         <span id="bulk-count">0 selected</span>
         <div id="bulk-bar-actions">
@@ -3049,6 +3104,23 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     return bits.join(", ");
   }
 
+  /* Shimmer the tile until its thumbnail is actually on screen, then fade the
+     photo in. Every .tile in the page goes through here, so a thumbnail can
+     never end up stranded invisible by the CSS that does the fade. A cached
+     thumbnail is already complete and skips straight to visible -- no shimmer,
+     no fade, no flicker on a page the user has already seen. */
+  function fadeInWhenLoaded(tile, img) {
+    function ready() {
+      tile.classList.remove("loading");
+      img.classList.add("ready");
+    }
+    tile.classList.add("loading");
+    img.addEventListener("load", ready);
+    // A broken thumbnail must not shimmer forever; show the empty frame.
+    img.addEventListener("error", ready);
+    if (img.complete) ready();
+  }
+
   function renderFramePreview(items) {
     framePreviewGrid.innerHTML = "";
     items.forEach(function (item) {
@@ -3059,6 +3131,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       img.alt = item.filename;
       img.loading = "lazy";
       tile.appendChild(img);
+      fadeInWhenLoaded(tile, img);
       framePreviewGrid.appendChild(tile);
     });
   }
@@ -3246,6 +3319,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
   var refreshBtn = document.getElementById("refresh-btn");
   var searchInput = document.getElementById("search-input");
   var resultsSummary = document.getElementById("results-summary");
+  var gridSpinner = document.getElementById("grid-spinner");
   var pagePrev = document.getElementById("page-prev");
   var pageNext = document.getElementById("page-next");
   var pageInfo = document.getElementById("page-info");
@@ -3346,6 +3420,25 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     repaintAllSelections();
   });
 
+  /* Put the shape of the incoming page on screen the instant it is asked for,
+     rather than leaving the old grid (or an empty one, on first load) sitting
+     there looking ignored. *count* placeholders, so the grid does not jump when
+     the real tiles land. */
+  function renderSkeleton(count) {
+    grid.innerHTML = "";
+    state.tileById = {};
+    for (var i = 0; i < count; i++) {
+      var tile = document.createElement("div");
+      tile.className = "tile skeleton loading";
+      grid.appendChild(tile);
+    }
+  }
+
+  function setGridBusy(busy) {
+    grid.setAttribute("aria-busy", busy ? "true" : "false");
+    gridSpinner.className = busy ? "on" : "";
+  }
+
   function renderGrid() {
     grid.innerHTML = "";
     state.tileById = {};
@@ -3361,6 +3454,7 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       img.loading = "lazy";
       img.decoding = "async";
       tile.appendChild(img);
+      fadeInWhenLoaded(tile, img);
 
       if (item.kind === "video") {
         var badge = document.createElement("div");
@@ -3497,12 +3591,28 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       .catch(function () {});
   }
 
+  /* Only the newest request may paint. Clicking Next twice quickly, or typing
+     in the search box, leaves earlier requests in flight; without this the
+     slower one could land last and leave the grid showing a page the user has
+     already navigated away from. */
+  var gridSeq = 0;
+
   function loadGrid() {
     var params = gridParams(state.page);
+    var seq = ++gridSeq;
+
+    // Feedback first, request second: the user sees the click land immediately.
+    var expected = state.total
+      ? Math.max(1, Math.min(PAGE_SIZE, state.total - (state.page - 1) * PAGE_SIZE))
+      : PAGE_SIZE;
+    renderSkeleton(expected);
+    setGridBusy(true);
 
     fetch("/media?" + params)
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (seq !== gridSeq) return;
+        setGridBusy(false);
         state.hasNext = !!data.has_next;
         state.total = data.total || 0;
         state.items = data.items || [];
@@ -3527,6 +3637,8 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         prefetchNextPage();
       })
       .catch(function () {
+        if (seq !== gridSeq) return;
+        setGridBusy(false);
         grid.innerHTML = "<div>Could not load photos.</div>";
         resultsSummary.textContent = "";
       });
