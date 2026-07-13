@@ -2445,10 +2445,15 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
      breakdowns and impossible to filter down to. */
   var UNSORTED = 'unsorted';
 
-  function unsortedRow(count, label, pick) {
-    var row = leafRow();
-    row.appendChild(treeLeaf(label, count, true, function () { pick(UNSORTED); }));
-    return row;
+  /* Unsorted is a top-level entry like any year or country -- same treeNode
+     shape, same grid cell -- so it reads as one more thing you can pick, not
+     as a footnote hanging off the bottom of the tree. */
+  function unsortedNode(count, label, allLabel, pick) {
+    var node = treeNode(label, count);
+    node.kids.appendChild(
+      treeLeaf(allLabel, count, true, function () { pick(UNSORTED); })
+    );
+    return node.node;
   }
 
   function renderTimeTree(byYear, byMonth, undated) {
@@ -2478,7 +2483,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     });
     var years = box.children.length;
     if (undated) {
-      box.appendChild(unsortedRow(undated, 'Unsorted (no date)', pickTime));
+      box.appendChild(
+        unsortedNode(undated, 'Unsorted', 'All undated photos', pickTime)
+      );
     }
     if (!years && !undated) {
       box.textContent = 'No dated photos yet.';
@@ -2563,7 +2570,9 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
       });
     var countries = box.children.length;
     if (unplaced) {
-      box.appendChild(unsortedRow(unplaced, 'Unsorted (no location)', pickPlace));
+      box.appendChild(
+        unsortedNode(unplaced, 'Unsorted', 'All photos with no location', pickPlace)
+      );
     }
     if (!countries && !unplaced) {
       box.textContent = 'No located photos yet.';
