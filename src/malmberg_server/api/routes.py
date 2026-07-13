@@ -43,6 +43,7 @@ from malmberg_server.faces.faces_index import FaceStore
 from malmberg_server.faces.people import PersonStore
 from malmberg_server.faces.worker import run_face_worker, sync_person_ids
 from malmberg_server.ingest.errors import IngestError
+from malmberg_server.ingest.gazetteer import configure as configure_gazetteer
 from malmberg_server.ingest.media import (
     extract_exif,
     make_thumbnail,
@@ -50,6 +51,7 @@ from malmberg_server.ingest.media import (
     transform_image,
 )
 from malmberg_server.ingest.playlists import PlaylistStore
+from malmberg_server.ingest.regeocode import run_regeocode_worker
 from malmberg_server.ingest.store import MediaStore
 from malmberg_server.ingest.thumbs import run_thumb_worker, thumb_path
 from malmberg_server.ingest.upload import handle_upload
@@ -360,6 +362,7 @@ def build_app(
         index_path=_index_path(),
     )
     _cloud_engine.load_state()
+    configure_gazetteer(cfg.fs_root)
 
     @app.on_event("startup")
     async def _start_face_worker() -> None:
@@ -380,6 +383,15 @@ def build_app(
                 _faces_path(),
             )
         )
+
+    @app.on_event("startup")
+    async def _start_regeocode_worker() -> None:
+        """Kick off the background re-geocode sweep (see ingest.regeocode).
+
+        Improving the place dataset has to reach the photos already in the
+        library, not just the next import; this is what carries it there.
+        """
+        asyncio.create_task(run_regeocode_worker(_store, _index_path()))
 
     @app.on_event("startup")
     async def _start_thumb_worker() -> None:

@@ -12,6 +12,8 @@ from typani.result import Err, Ok, Result
 from malmberg_core.logging import get_logger
 from malmberg_core.models import MediaMetadata
 from malmberg_server.ingest.errors import IngestError
+from malmberg_server.ingest.gazetteer import GAZETTEER_VERSION
+from malmberg_server.ingest.gazetteer import reverse_geocode as _reverse_geocode
 
 _log = get_logger(__name__)
 
@@ -56,51 +58,17 @@ MediaStore) so no manual re-ingest is ever required.
 
 Version history:
   1 -> 2: added meta.place (offline reverse geocode of lat/lon).
+
+Note that the gazetteer has its OWN version (gazetteer.GAZETTEER_VERSION,
+stored as meta.geo_version): a dataset fix re-geocodes from the stored lat/lon
+in memory, which is far cheaper than the full re-extract a schema bump forces,
+so the two are deliberately not the same number.
 """
 
-_geocoder = None
-"""Lazily-imported reverse_geocoder module handle, or False once import has
-been tried and failed. None means "not yet attempted"."""
-
-
-def reverse_geocode(lat: float | None, lon: float | None) -> str | None:
-    """Best-effort offline reverse geocode of (*lat*, *lon*) to a place label.
-
-    Uses the optional `reverse_geocoder` package (offline, bundled cities
-    dataset; part of the `geocode` extra -- NOT a base dependency, and never
-    installed on the display/Pi). Returns None if coordinates are missing,
-    the package is not installed, or lookup fails for any reason -- this
-    must never raise or block ingestion. Runs a single lookup at a time
-    (mode=1) to avoid reverse_geocoder's default multiprocessing pool, which
-    is unnecessary overhead for one-off single-photo lookups.
-    """
-    global _geocoder
-    if lat is None or lon is None:
-        return None
-    if _geocoder is False:
-        return None
-    if _geocoder is None:
-        try:
-            import reverse_geocoder as rg
-
-            _geocoder = rg
-        except ImportError:
-            _log.warning(
-                "reverse_geocoder unavailable; photo places will not be "
-                "populated (install the 'geocode' extra on the server)"
-            )
-            _geocoder = False
-            return None
-    try:
-        result = _geocoder.get((lat, lon), mode=1)
-        city = (result.get("name") or "").strip()
-        region = (result.get("admin1") or "").strip()
-        country = (result.get("cc") or "").strip()
-        parts = [p for p in (city, region, country) if p]
-        return ", ".join(parts) if parts else None
-    except Exception:
-        _log.warning("reverse_geocode failed for (%s, %s)", lat, lon, exc_info=True)
-        return None
+# Reverse geocoding lives in ingest.gazetteer (which dataset, how it is built,
+# and the user's extra-places file). Re-exported here because this is where
+# callers have always imported it from, and where extract_exif uses it.
+reverse_geocode = _reverse_geocode
 
 
 # EXIF tag IDs we care about, resolved by name for readability.
@@ -190,6 +158,7 @@ def extract_exif(path: Path) -> Result[MediaMetadata, IngestError]:
             lat=lat,
             lon=lon,
             place=place,
+            geo_version=GAZETTEER_VERSION,
             width=width,
             height=height,
             sha256=digest,

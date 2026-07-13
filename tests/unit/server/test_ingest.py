@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import malmberg_server.ingest.media as media_mod
 from malmberg_core.models import MediaItem, MediaMetadata
+from malmberg_server.ingest import gazetteer
 from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import (
     META_SCHEMA_VERSION,
@@ -95,11 +95,11 @@ def test_extract_exif_plain_png(tmp_path: Path) -> None:
 
 def test_reverse_geocode_known_coordinate() -> None:
     """A known Tampa-area coordinate resolves to a plausible Florida label."""
-    pytest.importorskip("reverse_geocoder")
-    media_mod._geocoder = None  # force a fresh import attempt
+    pytest.importorskip("numpy")
+    gazetteer.configure(None)
     place = reverse_geocode(27.98, -82.82)
     assert place is not None
-    assert "Florida" in place or "FL" in place or "US" in place
+    assert "Florida" in place
 
 
 def test_reverse_geocode_none_coords() -> None:
@@ -107,14 +107,76 @@ def test_reverse_geocode_none_coords() -> None:
     assert reverse_geocode(1.0, None) is None
 
 
-def test_reverse_geocode_missing_package(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reverse_geocode_missing_numpy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Simulate the geocode extra not being installed: best-effort None, no raise."""
-    media_mod._geocoder = None
-    monkeypatch.setitem(sys.modules, "reverse_geocoder", None)
+    gazetteer.configure(None)
+    monkeypatch.setitem(sys.modules, "numpy", None)
     try:
         assert reverse_geocode(27.98, -82.82) is None
     finally:
-        media_mod._geocoder = None
+        gazetteer.configure(None)
+
+
+def test_reverse_geocode_distinguishes_batam_from_singapore() -> None:
+    """The bug this dataset exists to fix: reverse_geocoder's bundled city list
+    has no Batam, so every photo on the island came back "Singapore"."""
+    pytest.importorskip("numpy")
+    gazetteer.configure(None)
+    assert "Batam" in (reverse_geocode(1.19, 104.10) or "")  # Nongsa, Batam
+    assert "Batam" in (reverse_geocode(1.14, 103.95) or "")  # Sekupang, Batam
+    assert "Singapore" in (reverse_geocode(1.29, 103.85) or "")
+
+
+def test_reverse_geocode_prefers_the_dominant_city_only() -> None:
+    """A city swallows its own districts; a town does not swallow its neighbour."""
+    pytest.importorskip("numpy")
+    gazetteer.configure(None)
+    # Ang Mo Kio is a new town inside a 20x bigger Singapore -> Singapore.
+    assert "Singapore" in (reverse_geocode(1.35, 103.82) or "")
+    # Oxelosund sits next to a merely 3x bigger Nykoping -> it keeps its name.
+    assert "Oxel" in (reverse_geocode(58.67, 17.10) or "")
+
+
+def test_reverse_geocode_nowhere_gets_no_label() -> None:
+    """Mid-ocean: no label beats a misleading one 200 km away."""
+    pytest.importorskip("numpy")
+    gazetteer.configure(None)
+    assert reverse_geocode(0.0, -30.0) is None
+
+
+def test_gazetteer_extra_csv_wins_for_nearby_photos(tmp_path) -> None:
+    """The user's own places (a cabin, a farm) beat any city near them.
+
+    A custom entry has no population, so the dominance rule would otherwise
+    hand its photos straight to the nearest real city -- exactly backwards.
+    """
+    pytest.importorskip("numpy")
+    (tmp_path / gazetteer.EXTRA_CSV_NAME).write_text(
+        "lat,lon,name,admin1,cc,population\n"
+        "27.9805,-82.8210,Grandma's house,Florida,US,0\n",
+        encoding="utf8",
+    )
+    gazetteer.configure(tmp_path)
+    try:
+        assert reverse_geocode(27.9805, -82.8210) == "Grandma's house, Florida, US"
+        # ...but only near it: a photo across town is still Clearwater.
+        assert "Clearwater" in (reverse_geocode(27.95, -82.75) or "")
+    finally:
+        gazetteer.configure(None)
+
+
+def test_gazetteer_ignores_a_malformed_extra_row(tmp_path) -> None:
+    """A typo in the user's file must not take geocoding down for the library."""
+    pytest.importorskip("numpy")
+    (tmp_path / gazetteer.EXTRA_CSV_NAME).write_text(
+        "lat,lon,name,admin1,cc,population\nnot-a-number,-82.8,Broken,Florida,US,0\n",
+        encoding="utf8",
+    )
+    gazetteer.configure(tmp_path)
+    try:
+        assert "Clearwater" in (reverse_geocode(27.98, -82.82) or "")
+    finally:
+        gazetteer.configure(None)
 
 
 # ---------------------------------------------------------------------------

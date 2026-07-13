@@ -875,27 +875,67 @@ see below).
 
 GPS-tagged photos (`meta.lat`/`meta.lon`, currently populated for iPhone
 photos only -- most older cameras carry no GPS EXIF) are turned into a
-human-readable `meta.place` label entirely offline, on the server, at ingest
-time (`malmberg_server.ingest.media.reverse_geocode`). This never makes an
-online request: it is a **best-effort** lookup against the `reverse_geocoder`
-package's bundled offline cities dataset (`mode=1`, no multiprocessing pool).
+human-readable `meta.place` label entirely offline, on the server
+(`malmberg_server.ingest.gazetteer`). This never makes an online request.
 
-- `reverse_geocoder` (which pulls in `numpy`/`scipy`) is **not** a base
-  dependency -- it lives under a dedicated `geocode` optional extra in
-  `pyproject.toml`, installed on the server only with
-  `uv sync --extra geocode`. The Pi display never installs it.
-- The import is best-effort (`try`/`except ImportError`): if the extra is not
-  installed, `reverse_geocode` logs a warning once and returns `None` forever
-  after -- ingestion and metadata refresh are unaffected, `meta.place` just
-  stays `null`.
+**The dataset.** We ship GeoNames cities500 (every populated place down to
+~500 people, 225k rows, gzipped in `malmberg_server/data/cities500.csv.gz`,
+CC BY 4.0). We used to use `reverse_geocoder`'s bundled list, but it is
+cities1000 filtered down further and the gaps are not where you would guess:
+**Batam** -- an Indonesian city of 1.3 million people, 25 km across the strait
+from Singapore -- is absent from it entirely. Nearest-city lookup therefore
+labelled every photo taken on Batam (and across the Riau archipelago)
+"Singapore, SG"; that was 1,382 photos in the real library.
+
+**The picking rule.** A denser dataset alone makes nearest-city *too* literal:
+the closest populated place to a photo taken in downtown Singapore is a new
+town like Ang Mo Kio, which shatters "Singapore" into districts. So the closest
+place wins by default, but a neighbour takes the label off it only by being
+`_DOMINANCE` (10x) larger, within `_NEARBY_SLACK_KM` (12 km):
+
+| Photo taken in | Closest place | Nearby giant | Label | Why |
+|---|---|---|---|---|
+| Nongsa, Batam | Batam (1.3M) | Singapore is 29 km away | `Batam, Riau, ID` | Singapore is not even a candidate |
+| Sekupang, Batam | Sekupang (pop 0) | Batam, 9 km | `Batam, Riau, ID` | anything populated dominates a 0 |
+| Ang Mo Kio | Ang Mo Kio (174k) | Singapore (3.5M), 7 km | `Singapore, SG` | 20x bigger: a city swallows its districts |
+| Oxelosund, SE | Oxelosund (11k) | Nykoping (30k), 11 km | `Oxelosund, ...` | only 3x bigger: a town does not swallow its neighbour |
+| Mid-Atlantic | nothing within 60 km | -- | `null` | no label beats a misleading one |
+
+Place names carry their real spelling (accents and all -- the dataset is UTF-8,
+and being a gzipped blob it costs the codebase no non-ASCII source).
+
+**Your own places.** `<fs_root>/geocode-extra.csv` (columns
+`lat,lon,name,admin1,cc,population`) is merged on top of the dataset if
+present, for what no public gazetteer will ever have -- a cabin, a family farm,
+"Grandma's house". Custom rows are **exempt from the dominance rule**: if the
+user says a spot on the map is Grandma's house, a photo taken there says
+Grandma's house and no city outvotes it. A malformed row is logged and skipped,
+never fatal.
+
+**Reaching the photos already in the library.** `meta.geo_version` records the
+`GAZETTEER_VERSION` each label was produced with, and
+`malmberg_server.ingest.regeocode.run_regeocode_worker` (a background task,
+started at server startup) recomputes `place` for every item behind the current
+version. It works off the lat/lon already in the index, so it touches no photo
+files at all: no decode, no re-hash, no EXIF re-read. That is why the gazetteer
+has its own version counter rather than riding on `META_SCHEMA_VERSION`, whose
+bump would force a full re-extract of every file in the library to fix a
+string. A user-set `manual_place` is never overwritten.
+
+- The `geocode` extra (`uv sync --extra geocode`) is just `numpy` now -- the
+  lookup is one vectorized distance pass over the dataset (~9 ms). It is
+  installed on the server only; the Pi never runs this.
+- If numpy or the dataset is unavailable, a warning is logged once and
+  `reverse_geocode()` returns `None` forever after -- ingestion and metadata
+  refresh are unaffected, `meta.place` just stays `null`. It never raises into
+  its caller.
 - `meta.place` feeds `GET /media?q=`, `GET /stats` (`by_place`), and
   `GET /places` (autocomplete) -- see those endpoints above.
 - The display reads the server's label as `meta.effective_place` and renders
   it directly in the photo caption (`ServerProducer._item_from_raw` ->
   `PictureDisplay` -> `ImageCaption.from_metadata`). Because the Pi has no
   geocoder dataset of its own, this is the only source of a real place name on
-  the frame: without it the caption can only fall back to decimal
-  coordinates.
+  the frame: without it the caption can only fall back to decimal coordinates.
 
 ---
 

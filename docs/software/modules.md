@@ -183,6 +183,16 @@ from malmberg_server.ingest import (
   `extract_exif`, moves to `media_root/YYYY/MM/DD/filename`, calls `store.add`.
 - `sha256_of_file(path) -> str` -- returns the hex digest; raises `OSError` on
   missing file.
+- `gazetteer.reverse_geocode(lat, lon) -> str | None` -- offline place lookup
+  over the bundled GeoNames cities500 dataset, population-aware (the closest
+  place wins unless a neighbour is 10x bigger within 12 km, which is what keeps
+  Batam out of Singapore and Ang Mo Kio inside it). `gazetteer.configure(fs_root)`
+  points it at the user's optional `geocode-extra.csv`; `GAZETTEER_VERSION` is
+  bumped when the dataset or the rule changes.
+- `regeocode.run_regeocode_worker(store, index_path)` -- background task that
+  recomputes `place` for items behind `GAZETTEER_VERSION`, from the lat/lon
+  already in the index (no photo files are touched). This is how a gazetteer
+  fix reaches photos that are already in the library.
 - `thumbs.run_thumb_worker(store, fs_root, media_root)` -- background asyncio
   task that pre-generates the browse-grid thumbnail sizes (`thumbs.WARM_SIZES`)
   for every non-trashed item, so paging never pays for a full-resolution decode

@@ -59,7 +59,11 @@ privacy = [
     "ultralytics>=8.0.0",
 ]
 geocode = [
-    "reverse_geocoder>=1.5.1",
+    # The place lookup is our own (ingest.gazetteer) over a bundled GeoNames
+    # dataset; all it needs is one vectorized distance pass. reverse_geocoder
+    # used to live here, but its bundled city list is missing places as big as
+    # Batam, which is what sent 1,382 photos to the wrong country.
+    "numpy>=1.24.0",
 ]
 faces = [
     "insightface>=0.7.3",
@@ -89,7 +93,7 @@ packages = { find = { where = ["src"] } }
 [tool.setuptools.package-data]
 malmberg_core = ["py.typed", "logging/config.toml"]
 malmberg_display = ["py.typed"]
-malmberg_server = ["py.typed"]
+malmberg_server = ["py.typed", "data/cities500.csv.gz"]
 
 [tool.ruff]
 line-length = 88

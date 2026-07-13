@@ -26,6 +26,14 @@ class MediaMetadata(BaseModel):
     server (e.g. "Tampa, Florida, US"); None when there is no GPS fix or the
     geocoder is unavailable. Never populated online -- see
     malmberg_server.ingest.media.reverse_geocode."""
+    geo_version: int = 0
+    """Gazetteer version ``place`` was reverse-geocoded with (see
+    malmberg_server.ingest.gazetteer.GAZETTEER_VERSION). Items behind the
+    current version are re-geocoded from their stored lat/lon by the background
+    sweep in malmberg_server.ingest.regeocode, so improving the place dataset
+    fixes the existing library without a re-ingest. Defaults to 0 so rows
+    written before this field existed parse unchanged -- and get re-geocoded
+    once, which is exactly what a 0 should mean."""
     width: Optional[int] = None
     height: Optional[int] = None
     duration_s: Optional[float] = None
