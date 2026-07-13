@@ -29,22 +29,35 @@ def make_player(wid: Optional[int], hw_decode: bool) -> Optional[Any]:
     if wid is None:
         _log.warning("No window id for mpv; videos will be skipped")
         return None
+
+    # "auto-copy", NOT "auto".  Plain "auto" picks a decoder (drm on the Pi)
+    # whose frames stay in GPU/DRM memory, which the gpu vo cannot composite
+    # into our embedded X11 window: it drew nothing and the window showed mpv's
+    # empty-state background -- the solid blue screen during videos.  The
+    # "-copy" variants copy frames back to normal memory, so they display
+    # correctly while still decoding in hardware (verified on the Pi: HEVC
+    # clips play via drm-copy, 0/12 clips blue).
+    hwdec = "auto-copy" if hw_decode else "no"
     try:
         import mpv  # noqa: PLC0415 -- hardware-optional import deferred to runtime
 
         player = mpv.MPV(
             wid=str(wid),
             vo="gpu",
-            hwdec="auto" if hw_decode else "no",
+            hwdec=hwdec,
             idle="yes",  # stay alive between clips instead of exiting
             osc=False,
             input_default_bindings=False,
             keep_open="no",
+            # Fall back to a silent output if the sound device is busy.  mpv's
+            # default chain ends at JACK, which is not running here and whose
+            # failure is FATAL -- it aborts loading the file, video and all.
+            ao="alsa,null",
         )
     except Exception as exc:  # mpv missing, libmpv too old, no GPU vo, ...
         _log.error("Could not start mpv (videos will be skipped): %s", exc)
         return None
-    _log.info("mpv ready (embedded, hwdec=%s)", "auto" if hw_decode else "no")
+    _log.info("mpv ready (embedded, hwdec=%s)", hwdec)
     return player
 
 
@@ -96,14 +109,23 @@ class VideoDisplay(Displayable):
 
         loop = asyncio.get_running_loop()
         timeout = ctx.video_max_s if ctx.video_max_s and ctx.video_max_s > 0 else None
+        started = loop.time()
         try:
             # Muted unless the user manually picked this one item to show, so
             # the ambient slideshow never plays sound on its own.
             player.mute = ctx.mute_video
+            _log.info("Video %s: starting playback", self._path.name)
             player.play(str(self._path))
             await asyncio.wait_for(
                 loop.run_in_executor(None, player.wait_for_playback),
                 timeout=timeout,
+            )
+            _log.info(
+                "Video %s: finished after %.1fs (codec=%s, hwdec=%s)",
+                self._path.name,
+                loop.time() - started,
+                getattr(player, "video_codec", None),
+                getattr(player, "hwdec_current", None),
             )
         except asyncio.TimeoutError:
             # A stalled clip used to block the display task forever. Stop it

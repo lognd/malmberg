@@ -292,8 +292,18 @@ def main() -> int:
         argfile = f.name
 
     print("\nWriting EXIF with exiftool (this can take a while)...")
+    # -m suppresses errors exiftool itself marks [minor], e.g. "GPS pointer
+    # references previous IFD0 directory" on a slightly malformed EXIF block.
+    # Without it exiftool refuses to write that file at all and the photo keeps
+    # its missing date/GPS over a defect it is willing to repair.  It does NOT
+    # cover the extension/content mismatch above -- that one is fatal whatever
+    # flags are passed, which is why those files get renamed instead.
+    #
+    # It goes in -common_args because the argfile is a series of -execute
+    # blocks, each its own command; a plain leading option would apply only to
+    # the first block.
     proc = subprocess.run(
-        ["exiftool", "-@", argfile, "-common_args", "-charset", "filename=utf8"],
+        ["exiftool", "-@", argfile, "-common_args", "-m", "-charset", "filename=utf8"],
         check=False,
     )
     Path(argfile).unlink(missing_ok=True)
