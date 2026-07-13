@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,15 @@ from malmberg_server.ingest.errors import IngestError
 from malmberg_server.ingest.media import META_SCHEMA_VERSION, extract_exif
 
 _log = get_logger(__name__)
+
+ItemList = list[MediaItem]
+"""Spelled out here, at module scope, because inside MediaStore the name ``list``
+is the paging method, not the builtin."""
+
+_VIEW_CACHE_SIZE = 8
+"""Distinct filter sets to keep pre-filtered views for. Enough that flipping
+between a few years/places in the tree stays warm; small enough that the cached
+lists (references only) stay a rounding error against the library itself."""
 
 UNSORTED = "unsorted"
 """Sentinel value for the ``q_time`` / ``q_place`` filters meaning "the field
@@ -48,6 +58,11 @@ class MediaStore:
         time."""
         self._stats_cache: dict[tuple, dict] = {}
         self._counts_cache: dict[tuple, dict[str, int]] = {}
+        self._view_cache: OrderedDict[tuple, ItemList] = OrderedDict()
+        """Filtered+sorted item lists, keyed by (version, filters). Paging is a
+        slice of one of these: without it, every page turn (and the dashboard's
+        prefetch of the next page, so twice per turn) re-filtered and re-sorted
+        the whole library."""
 
     # ------------------------------------------------------------------
     # Persistence
@@ -285,32 +300,15 @@ class MediaStore:
         set to ``UNSORTED`` instead selects the items missing that field
         entirely.
         """
-        all_items = [
-            it
-            for it in self._items.values()
-            if it.trashed_at is None and not (skip_hidden and it.do_not_display)
-        ]
-        if q:
-            all_items = [
-                it for it in all_items if self._matches_query(it, q, people=people)
-            ]
-        if q_time or q_place or q_person:
-            all_items = [
-                it
-                for it in all_items
-                if self._matches_filters(
-                    it,
-                    q_time=q_time,
-                    q_place=q_place,
-                    q_person=q_person,
-                    people=people,
-                )
-            ]
-        if sort == "recent":
-            all_items.sort(
-                key=lambda it: it.meta.effective_taken_at or it.meta.ingest_at,
-                reverse=True,
-            )
+        all_items = self._view(
+            skip_hidden=skip_hidden,
+            sort=sort,
+            q=q,
+            q_time=q_time,
+            q_place=q_place,
+            q_person=q_person,
+            people=people,
+        )
         total = len(all_items)
         start = (page - 1) * page_size
         chunk = all_items[start : start + page_size]
@@ -323,6 +321,77 @@ class MediaStore:
             page_size=page_size,
             has_next=(start + page_size) < total,
         )
+
+    def _view(
+        self,
+        *,
+        skip_hidden: bool,
+        sort: str,
+        q: Optional[str],
+        q_time: Optional[str],
+        q_place: Optional[str],
+        q_person: Optional[str],
+        people: Optional["PersonStore"],
+    ) -> ItemList:
+        """The filtered, sorted item list behind one page of ``list``.
+
+        Cached against the mutation counter (plus, when the query touches
+        people, their names -- those live in PersonStore and change without
+        touching this store, so a rename must invalidate the view too). The
+        list is owned by the cache: callers may slice it, never mutate it.
+        """
+        people_fp = (
+            people.name_fingerprint() if people is not None and (q or q_person) else 0
+        )
+        key = (
+            self._version,
+            skip_hidden,
+            sort,
+            q or "",
+            q_time or "",
+            q_place or "",
+            q_person or "",
+            people_fp,
+        )
+        cached = self._view_cache.get(key)
+        if cached is not None:
+            self._view_cache.move_to_end(key)
+            return cached
+
+        items = [
+            it
+            for it in self._items.values()
+            if it.trashed_at is None and not (skip_hidden and it.do_not_display)
+        ]
+        if q:
+            items = [it for it in items if self._matches_query(it, q, people=people)]
+        if q_time or q_place or q_person:
+            items = [
+                it
+                for it in items
+                if self._matches_filters(
+                    it,
+                    q_time=q_time,
+                    q_place=q_place,
+                    q_person=q_person,
+                    people=people,
+                )
+            ]
+        if sort == "recent":
+            items.sort(
+                key=lambda it: it.meta.effective_taken_at or it.meta.ingest_at,
+                reverse=True,
+            )
+
+        # Entries for older versions can never be hit again, so drop them all
+        # rather than letting them age out one eviction at a time.
+        stale = [k for k in self._view_cache if k[0] != self._version]
+        for k in stale:
+            del self._view_cache[k]
+        self._view_cache[key] = items
+        while len(self._view_cache) > _VIEW_CACHE_SIZE:
+            self._view_cache.popitem(last=False)
+        return items
 
     def list_trash(
         self,

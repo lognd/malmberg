@@ -133,6 +133,18 @@ class PersonStore:
             _log.error("Failed to save people index to %s: %s", path, exc)
             return Err(PersonError.STORAGE_ERROR)
 
+    def name_fingerprint(self) -> int:
+        """Hash of the id -> name mapping, for cache keys that depend on it.
+
+        MediaStore caches search results that match on person names; those names
+        live here and change without touching MediaStore, so its cache keys have
+        to carry this. Derived rather than a bumped counter so it cannot silently
+        desync from a mutator that forgets to bump.
+        """
+        return hash(
+            tuple(sorted((pid, p.name or "") for pid, p in self._people.items()))
+        )
+
     # ------------------------------------------------------------------
     # Clustering: online assignment + recompute + full recluster
     # ------------------------------------------------------------------

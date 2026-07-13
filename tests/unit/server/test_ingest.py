@@ -995,3 +995,103 @@ def test_stats_by_person_reflects_a_rename_immediately() -> None:
 
     people.rename(person.id, "Alicia")
     assert s.stats(people=people)["by_person"] == {"Alicia": 1}
+
+
+# ---------------------------------------------------------------------------
+# The cached list view (paging must never serve a stale page)
+# ---------------------------------------------------------------------------
+
+
+def test_list_view_cache_sees_a_new_item() -> None:
+    """Paging is served from a cached filtered+sorted view; a mutation must
+    invalidate it, or an upload would be invisible until a restart."""
+    s = MediaStore()
+    s.add(_make_item(filename="a.jpg", meta=MediaMetadata(sha256="h1")))
+    assert s.list(sort="recent").total == 1
+
+    s.add(
+        _make_item(
+            filename="b.jpg", server_path="p/b.jpg", meta=MediaMetadata(sha256="h2")
+        )
+    )
+    page = s.list(sort="recent")
+    assert page.total == 2
+    assert {it.filename for it in page.items} == {"a.jpg", "b.jpg"}
+
+
+def test_list_view_cache_sees_a_deletion(tmp_path: Path) -> None:
+    s = MediaStore()
+    item = _make_item(meta=MediaMetadata(sha256="h1"))
+    s.add(item)
+    assert s.list().total == 1
+
+    s.delete_permanent(item.id, media_root=tmp_path)
+    assert s.list().total == 0
+
+
+def test_list_view_cache_reflects_a_person_rename() -> None:
+    """A q_person view is keyed on the names too: they live in PersonStore and
+    change without touching this store's mutation counter."""
+    from malmberg_server.faces.people import Person, PersonStore
+
+    people = PersonStore()
+    person = Person(name="Alice")
+    people._people[person.id] = person
+
+    s = MediaStore()
+    s.add(_make_item(meta=MediaMetadata(sha256="h1"), person_ids=[person.id]))
+    assert s.list(q_person="Alice", people=people).total == 1
+
+    people.rename(person.id, "Alicia")
+    assert s.list(q_person="Alice", people=people).total == 0
+    assert s.list(q_person="Alicia", people=people).total == 1
+
+
+def test_list_view_cache_keeps_filters_apart() -> None:
+    """Different filter sets must not read each other's cached view."""
+    s = MediaStore()
+    s.add(
+        _make_item(
+            filename="a.jpg",
+            meta=MediaMetadata(
+                sha256="h1", taken_at=datetime(2006, 7, 4), place="Tampa, FL"
+            ),
+        )
+    )
+    s.add(
+        _make_item(
+            filename="b.jpg",
+            server_path="p/b.jpg",
+            meta=MediaMetadata(
+                sha256="h2", taken_at=datetime(2010, 1, 1), place="Oslo, NO"
+            ),
+        )
+    )
+
+    assert s.list(q_time="2006").items[0].filename == "a.jpg"
+    assert s.list(q_time="2010").items[0].filename == "b.jpg"
+    assert s.list(q_place="Tampa").items[0].filename == "a.jpg"
+    assert s.list(q_time="2006").items[0].filename == "a.jpg"
+    assert s.list().total == 2
+
+
+def test_list_view_cache_paginates_consistently() -> None:
+    """Successive pages of one query must partition the result set, not overlap
+    or drop items -- the whole point of caching the view behind them."""
+    s = MediaStore()
+    for i in range(10):
+        s.add(
+            _make_item(
+                filename=f"{i}.jpg",
+                server_path=f"p/{i}.jpg",
+                meta=MediaMetadata(sha256=f"h{i}", taken_at=datetime(2020, 1, i + 1)),
+            )
+        )
+
+    seen: list[str] = []
+    for page in (1, 2, 3, 4):
+        got = s.list(page=page, page_size=3, sort="recent")
+        seen.extend(it.filename for it in got.items)
+        assert got.total == 10
+    assert len(seen) == 10
+    assert len(set(seen)) == 10
