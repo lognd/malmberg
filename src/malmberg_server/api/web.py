@@ -157,68 +157,6 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     letter-spacing: 0.04em;
     margin-top: 0.1rem;
   }
-  #by-year {
-    margin-top: 0.85rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-  .year-chip {
-    font-family: inherit;
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.4rem 0.9rem;
-    min-height: 44px;
-    font-size: 0.9rem;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .year-chip:hover, .year-chip:focus-visible {
-    border-color: var(--accent);
-    color: var(--text);
-    outline: none;
-  }
-  .year-chip b { color: var(--aqua); font-weight: 700; }
-  /* By-month breakdown (year groups, month chips) */
-  #by-month { margin-top: 0.85rem; }
-  .month-group {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    padding: 0.35rem 0;
-    border-top: 1px solid var(--border);
-    flex-wrap: wrap;
-  }
-  .month-group:first-child { border-top: none; }
-  .month-group .mg-year {
-    font-weight: 700;
-    color: var(--accent);
-    min-width: 3.2rem;
-    font-size: 0.85rem;
-  }
-  .month-group .mg-months {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-  }
-  .month-chip {
-    font-family: inherit;
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.3rem 0.7rem;
-    min-height: 40px;
-    font-size: 0.78rem;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .month-chip:hover, .month-chip:focus-visible {
-    border-color: var(--accent);
-    color: var(--text);
-    outline: none;
-  }
-  .month-chip b { color: var(--aqua); font-weight: 700; }
   /* Hierarchical time/place breakdowns. A flat chip list ran to hundreds of
      entries; these collapse (native <details>) and scroll instead. */
   .clear-btn {
@@ -320,10 +258,12 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    min-width: 0;
     font-size: 0.9rem;
     color: var(--text);
     border-radius: 6px;
   }
+  .tree-node > summary::before { flex: none; }
   .tree-node > summary::-webkit-details-marker { display: none; }
   .tree-node > summary::before {
     content: "\\25B8";           /* right-pointing triangle */
@@ -338,7 +278,18 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     font-weight: 700;
     min-width: 2.5rem;
     text-align: right;
+    flex: none;
   }
+  /* Takes whatever width the count leaves and gives up gracefully: a long name
+     ("Saint-Jean-Cap-Ferrat, France") ellipsises instead of widening its row. */
+  .tn-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tree-leaf .tn-label { flex: 0 1 auto; }
+  .tree-node > summary .tn-label { flex: 1 1 auto; }
   .tree-children {
     margin-left: 1rem;
     padding-left: 0.5rem;
@@ -378,13 +329,40 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     outline: none;
   }
   .tree-leaf.tn-all { color: var(--accent); font-weight: 700; }
-  /* By-place breakdown, same chip look as by-year */
-  #by-place {
-    margin-top: 0.85rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
+  /* Phones. The tree is the part that suffered most: two collapsed nodes would
+     share a row (a triangle stranded mid-line), the nesting indent ate the
+     width a long place name needed, and the chips ran off the right edge. One
+     node per row, a shallower indent, and thumb-sized (44px) targets. */
+  @media (max-width: 640px) {
+    .tree-box, .tree-groups { grid-template-columns: 1fr; }
+    .tree-box {
+      max-height: 60vh;
+      padding: 0.35rem 0.4rem;
+    }
+    .tree-node > summary {
+      min-height: 44px;
+      font-size: 0.95rem;
+      gap: 0.4rem;
+    }
+    .tree-children {
+      margin-left: 0.35rem;
+      padding-left: 0.45rem;
+    }
+    .tn-count {
+      min-width: 2rem;
+      font-size: 0.85rem;
+    }
+    .tree-leaves { gap: 0.35rem; }
+    .tree-leaf {
+      min-height: 44px;
+      flex: 1 1 auto;
+      justify-content: flex-start;
+    }
+    .tree-leaf.tn-all { flex-basis: 100%; }
+    .tree-head { gap: 0.35rem; }
+    .tree-expand, .tree-collapse { min-height: 36px; }
   }
+  /* Chips for the people breakdown (#by-person). */
   .place-chip {
     font-family: inherit;
     background: var(--bg-alt);
@@ -2444,7 +2422,13 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     c.className = 'tn-count';
     c.textContent = String(count);
     summary.appendChild(c);
-    summary.appendChild(document.createTextNode(label));
+    /* The label is its own element, not a bare text node, so it can be given
+       the width it has left and ellipsised. A bare text node cannot, which is
+       how a long country name used to shove the row off a phone screen. */
+    var l = document.createElement('span');
+    l.className = 'tn-label';
+    l.textContent = label;
+    summary.appendChild(l);
     node.appendChild(summary);
     var kids = document.createElement('div');
     kids.className = 'tree-children';
@@ -2460,7 +2444,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     c.className = 'tn-count';
     c.textContent = String(count);
     b.appendChild(c);
-    b.appendChild(document.createTextNode(' ' + label));
+    var l = document.createElement('span');
+    l.className = 'tn-label';
+    l.textContent = label;
+    b.appendChild(l);
     b.setAttribute('aria-label', 'Search and browse ' + label);
     b.addEventListener('click', onPick);
     return b;
