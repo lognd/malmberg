@@ -914,3 +914,84 @@ def test_gazetteer_index_agrees_with_an_exhaustive_scan() -> None:
             lat,
             lon,
         )
+
+
+# ---------------------------------------------------------------------------
+# Derived indexes: the danger is drift, not slowness
+# ---------------------------------------------------------------------------
+
+
+def test_digest_index_tracks_every_mutation(tmp_path: Path) -> None:
+    """sha256_exists is a dict lookup now, so it is only as good as the index.
+
+    A stale digest index would either reject a new photo as a duplicate or let
+    a real duplicate in -- both silent. Exercise every mutation path.
+    """
+    s = MediaStore()
+    item = _make_item(meta=MediaMetadata(sha256="abc"))
+    s.add(item)
+    assert s.sha256_exists("abc")
+
+    # patch that rewrites the digest (a re-extract does this)
+    s.patch(item.id, {"meta": item.meta.model_copy(update={"sha256": "def"})})
+    assert not s.sha256_exists("abc")
+    assert s.sha256_exists("def")
+
+    # trash + restore keep the item, so the digest stays known
+    media_root, trash = tmp_path / "media", tmp_path / "trash"
+    (media_root / "2024/01/01").mkdir(parents=True)
+    (media_root / item.server_path).write_bytes(b"x")
+    s.delete(item.id, trash, media_root)
+    assert s.sha256_exists("def")
+    s.restore(item.id, trash, media_root)
+    assert s.sha256_exists("def")
+
+    # permanent delete forgets it
+    s.delete_permanent(item.id, media_root, trash)
+    assert not s.sha256_exists("def")
+
+    # and a reload from disk rebuilds it
+    s2 = MediaStore()
+    s2.add(_make_item(meta=MediaMetadata(sha256="ghi")))
+    path = tmp_path / "index.jsonl"
+    assert s2.save_to_disk(path).is_ok
+    s3 = MediaStore()
+    assert s3.load_from_disk(path).is_ok
+    assert s3.sha256_exists("ghi")
+
+
+def test_stats_cache_is_invalidated_by_mutations() -> None:
+    """A cached aggregate that outlives its data is worse than a slow one."""
+    s = MediaStore()
+    a = _make_item(filename="a.jpg", meta=MediaMetadata(sha256="h1"))
+    s.add(a)
+    assert s.stats()["total"] == 1
+    assert s.stats()["undated"] == 1
+
+    s.add(_make_item(filename="b.jpg", meta=MediaMetadata(sha256="h2")))
+    assert s.stats()["total"] == 2
+
+    s.patch(a.id, {"meta": a.meta.model_copy(update={"manual_place": "Home"})})
+    assert s.stats()["by_place"] == {"Home": 1}
+    assert s.stats()["unplaced"] == 1
+    assert s.places(q="ho") == ["Home"]
+
+    s.patch(a.id, {"do_not_display": True})
+    assert s.stats()["total"] == 1
+
+
+def test_stats_by_person_reflects_a_rename_immediately() -> None:
+    """by_person is deliberately not cached with the rest: the names live in
+    PersonStore, which changes without touching this store at all."""
+    from malmberg_server.faces.people import Person, PersonStore
+
+    people = PersonStore()
+    person = Person(name="Alice")
+    people._people[person.id] = person
+
+    s = MediaStore()
+    s.add(_make_item(meta=MediaMetadata(sha256="h1"), person_ids=[person.id]))
+    assert s.stats(people=people)["by_person"] == {"Alice": 1}
+
+    people.rename(person.id, "Alicia")
+    assert s.stats(people=people)["by_person"] == {"Alicia": 1}

@@ -170,7 +170,20 @@ from malmberg_server.ingest import (
   - `delete(id, trash_root, media_root) -> Result[dict, IngestError]` -- apply
     hide policy.
   - `list(*, page, page_size, skip_hidden) -> MediaPage` -- paginated query.
-  - `sha256_exists(digest) -> bool` -- deduplication check.
+  - `sha256_exists(digest) -> bool` -- deduplication check; an O(1) dict
+    lookup against a maintained digest index, not a scan (it is asked once per
+    uploaded file, so a scan made importing N files into a library of M cost
+    O(N*M): ~10 s of pure dedup checking for a 5,000-file import into a 20k
+    library).
+  - `stats()` / `places()` / `counts_by_person()` -- the library-derived
+    aggregates are cached against an internal mutation counter, so /stats,
+    /people, and the /places autocomplete (a request per keystroke) stop
+    re-walking every item on every call. `stats(people=...)`'s `by_person` is
+    deliberately *not* cached with them: names live in `PersonStore`, which
+    changes without touching this store, so a rename must show up immediately.
+  - **Every write goes through `_put`/`_drop`.** That is the whole contract
+    keeping those derived indexes honest -- assigning into `_items` directly
+    anywhere else desyncs them silently.
   - `load_from_disk(path) -> Result[int, IngestError]` -- populate from a
     JSON-lines file; returns `Ok(n)` with the count loaded.
   - `save_to_disk(path) -> Result[None, IngestError]` -- atomic write via `.tmp`

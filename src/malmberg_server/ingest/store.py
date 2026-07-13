@@ -37,6 +37,17 @@ class MediaStore:
         self._items: dict[str, MediaItem] = {}
         self._dirty = False
         """Set when a lazy metadata refresh mutates an item in-memory."""
+        self._digests: dict[str, int] = {}
+        """SHA-256 -> how many items carry it. Upload dedup asks this question
+        once per incoming file; answering it by scanning every item made a bulk
+        import quadratic in the size of the library."""
+        self._version = 0
+        """Bumped on every mutation. The derived aggregates below are rebuilt
+        only when it moves, which is what stops /stats and the /places
+        autocomplete (a request per keystroke) from re-walking 20k items each
+        time."""
+        self._stats_cache: dict[tuple, dict] = {}
+        self._counts_cache: dict[tuple, dict[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Persistence
@@ -59,7 +70,7 @@ class MediaStore:
                     if not line:
                         continue
                     item = MediaItem.model_validate_json(line)
-                    self._items[item.id] = item
+                    self._put(item)
                     loaded += 1
             _log.info("Loaded %d media items from %s", loaded, path)
             return Ok(loaded)
@@ -84,11 +95,42 @@ class MediaStore:
 
     # ------------------------------------------------------------------
     # Mutations
+    #
+    # Every write goes through _put/_drop. That is the whole contract that
+    # keeps the derived indexes (digests, cached aggregates) honest: assigning
+    # into self._items directly anywhere else would silently desync them.
     # ------------------------------------------------------------------
+
+    def _put(self, item: MediaItem) -> None:
+        """Insert or replace *item*, keeping the derived indexes in step."""
+        old = self._items.get(item.id)
+        if old is not None and old.meta.sha256:
+            n = self._digests.get(old.meta.sha256, 0) - 1
+            if n > 0:
+                self._digests[old.meta.sha256] = n
+            else:
+                self._digests.pop(old.meta.sha256, None)
+        if item.meta.sha256:
+            self._digests[item.meta.sha256] = self._digests.get(item.meta.sha256, 0) + 1
+        self._items[item.id] = item
+        self._version += 1
+
+    def _drop(self, item_id: str) -> None:
+        """Remove *item_id*, keeping the derived indexes in step."""
+        item = self._items.pop(item_id, None)
+        if item is None:
+            return
+        if item.meta.sha256:
+            n = self._digests.get(item.meta.sha256, 0) - 1
+            if n > 0:
+                self._digests[item.meta.sha256] = n
+            else:
+                self._digests.pop(item.meta.sha256, None)
+        self._version += 1
 
     def add(self, item: MediaItem) -> None:
         """Insert *item* into the index."""
-        self._items[item.id] = item
+        self._put(item)
 
     def patch(self, item_id: str, updates: dict) -> Result[MediaItem, IngestError]:
         """Apply *updates* (field-name -> value) to the item with *item_id*."""
@@ -96,7 +138,7 @@ class MediaStore:
         if item is None:
             return Err(IngestError.NotFound)
         updated = item.model_copy(update=updates)
-        self._items[item_id] = updated
+        self._put(updated)
         return Ok(updated)
 
     def delete(
@@ -119,16 +161,18 @@ class MediaStore:
             # Keep the index entry (marked trashed) so the item remains
             # listable in the recycle bin and restorable; only the normal
             # list()/stats() views and producers exclude it.
-            self._items[item_id] = item.model_copy(
-                update={
-                    "trashed_at": datetime.now(timezone.utc),
-                    "trash_path": item.server_path,
-                }
+            self._put(
+                item.model_copy(
+                    update={
+                        "trashed_at": datetime.now(timezone.utc),
+                        "trash_path": item.server_path,
+                    }
+                )
             )
             _log.info("Trashed %s (%s)", item_id, item.filename)
             return Ok({"status": "trashed", "id": item_id})
         else:
-            self._items[item_id] = item.model_copy(update={"do_not_display": True})
+            self._put(item.model_copy(update={"do_not_display": True}))
             _log.info("Hidden (kept) %s (%s)", item_id, item.filename)
             return Ok({"status": "hidden", "id": item_id})
 
@@ -154,7 +198,7 @@ class MediaStore:
         else:
             src = media_root / item.server_path
         src.unlink(missing_ok=True)
-        del self._items[item_id]
+        self._drop(item_id)
         _log.info("Permanently deleted %s (%s)", item_id, item.filename)
         return Ok({"status": "deleted", "id": item_id})
 
@@ -184,7 +228,7 @@ class MediaStore:
             _log.error("Cannot restore %s: file missing from trash and media", item_id)
             return Err(IngestError.StorageError)
         restored = item.model_copy(update={"trashed_at": None, "trash_path": None})
-        self._items[item_id] = restored
+        self._put(restored)
         _log.info("Restored %s (%s) from trash", item_id, item.filename)
         return Ok(restored)
 
@@ -344,7 +388,7 @@ class MediaStore:
             }
         )
         refreshed = item.model_copy(update={"meta": new_meta})
-        self._items[item.id] = refreshed
+        self._put(refreshed)
         self._dirty = True
         _log.info(
             "Refreshed metadata for %s (schema %d -> %d)",
@@ -355,8 +399,13 @@ class MediaStore:
         return refreshed
 
     def sha256_exists(self, digest: str) -> bool:
-        """Return True if any stored item has the given SHA-256 digest."""
-        return any(it.meta.sha256 == digest for it in self._items.values())
+        """Return True if any stored item has the given SHA-256 digest.
+
+        A dict lookup, not a scan: this is asked once per uploaded file, so a
+        scan made importing N files into a library of M cost O(N*M) -- the
+        30-minute bulk imports were mostly this.
+        """
+        return digest in self._digests
 
     def all_ids(self) -> list[str]:
         """Return every item id currently in the index (trashed included)."""
@@ -378,13 +427,23 @@ class MediaStore:
         ][:limit]
 
     def counts_by_person(self, *, skip_hidden: bool = True) -> dict[str, int]:
-        """Return person_id -> distinct-photo count, for the /people listing."""
+        """Return person_id -> distinct-photo count, for the /people listing.
+
+        Cached against the mutation counter: /people is hit on every dashboard
+        load and after every face override, and this walked the whole library
+        each time.
+        """
+        key = (self._version, skip_hidden)
+        cached = self._counts_cache.get(key)
+        if cached is not None:
+            return cached
         counts: dict[str, int] = {}
         for it in self._items.values():
             if it.trashed_at is not None or (skip_hidden and it.do_not_display):
                 continue
             for pid in it.person_ids:
                 counts[pid] = counts.get(pid, 0) + 1
+        self._counts_cache = {key: counts}
         return counts
 
     def stats(
@@ -404,6 +463,34 @@ class MediaStore:
         given, ``by_person`` (a dict of named-person display name -> photo
         count, sorted by count descending; unnamed persons are omitted).
         """
+        result = dict(self._base_stats(skip_hidden=skip_hidden))
+        if people is not None:
+            # Deliberately NOT cached with the rest: names live in PersonStore,
+            # which changes without touching this store, so a rename must show
+            # up immediately. Built from the cached per-id counts, so it costs
+            # one pass over the people, not over the library.
+            by_person: dict[str, int] = {}
+            for pid, count in self.counts_by_person(skip_hidden=skip_hidden).items():
+                person = people.get(pid)
+                if person is None or not person.name:
+                    continue
+                by_person[person.name] = by_person.get(person.name, 0) + count
+            result["by_person"] = dict(
+                sorted(by_person.items(), key=lambda kv: (-kv[1], kv[0]))
+            )
+        return result
+
+    def _base_stats(self, *, skip_hidden: bool = True) -> dict:
+        """The library-derived half of stats(), cached against _version.
+
+        /stats is polled by the dashboard and /places (autocomplete, a request
+        per keystroke) is built straight off it, so this used to re-walk every
+        item several times per keystroke.
+        """
+        key = (self._version, skip_hidden)
+        cached = self._stats_cache.get(key)
+        if cached is not None:
+            return cached
         items = [
             it
             for it in self._items.values()
@@ -445,17 +532,9 @@ class MediaStore:
             "by_month": dict(sorted(by_month.items())),
             "by_place": dict(sorted(by_place.items(), key=lambda kv: (-kv[1], kv[0]))),
         }
-        if people is not None:
-            by_person: dict[str, int] = {}
-            for it in items:
-                for pid in it.person_ids:
-                    person = people.get(pid)
-                    if person is None or not person.name:
-                        continue
-                    by_person[person.name] = by_person.get(person.name, 0) + 1
-            result["by_person"] = dict(
-                sorted(by_person.items(), key=lambda kv: (-kv[1], kv[0]))
-            )
+        # One entry, not a growing map: only the current version is ever a hit,
+        # so this is a cache, not a leak.
+        self._stats_cache = {key: result}
         return result
 
     def places(
@@ -464,7 +543,7 @@ class MediaStore:
         """Return distinct place labels whose text contains *q* (case-insensitive),
         most-common first, capped at *limit*. Used for search autocomplete.
         """
-        counts = self.stats(skip_hidden=skip_hidden)["by_place"]
+        counts = self._base_stats(skip_hidden=skip_hidden)["by_place"]
         needle = q.strip().lower()
         matches = [name for name in counts if needle in name.lower()]
         # counts is already sorted by count desc, name asc; preserve that order.

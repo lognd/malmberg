@@ -597,3 +597,51 @@ def test_group_photo_lands_under_every_person(tmp_path: Path, monkeypatch) -> No
         page = store.list(q_person=f"Person {pid[:4]}", people=people)
         assert [it.id for it in page.items] == ["i1"]
         assert person is not None
+
+
+def test_face_indexes_survive_every_mutation() -> None:
+    """The person/item indexes are only as good as the writes that maintain
+    them; a drifted index shows up as a person missing half their photos, which
+    reads like a clustering bug rather than an indexing one."""
+    faces = FaceStore()
+    f1 = FaceEntry(item_id="i1", person_id="p1", bbox=(0, 0, 1, 1))
+    f2 = FaceEntry(item_id="i1", person_id="p2", bbox=(2, 2, 3, 3))
+    f3 = FaceEntry(item_id="i2", person_id="p1", bbox=(0, 0, 1, 1))
+    for f in (f1, f2, f3):
+        faces.add(f)
+
+    assert faces.person_ids_for_item("i1") == ["p1", "p2"]
+    assert sorted(faces.item_ids_for_person("p1")) == ["i1", "i2"]
+
+    # move a face between people
+    faces.set_person(f1.face_id, "p2")
+    assert faces.item_ids_for_person("p1") == ["i2"]
+    assert sorted(faces.item_ids_for_person("p2")) == ["i1"]
+    assert len(faces.faces_for_person("p2")) == 2
+
+    # merge
+    faces.reassign_all("p2", "p3")
+    assert faces.faces_for_person("p2") == []
+    assert len(faces.faces_for_person("p3")) == 2
+
+    # remove by item, then by person
+    faces.remove_for_item("i1")
+    assert faces.faces_for_item("i1") == []
+    assert faces.faces_for_person("p3") == []
+    assert len(faces) == 1
+    faces.remove_for_person("p1")
+    assert len(faces) == 0
+    assert faces.item_ids_for_person("p1") == []
+
+
+def test_face_indexes_rebuild_on_load(tmp_path: Path) -> None:
+    faces = FaceStore()
+    faces.add(FaceEntry(item_id="i1", person_id="p1", bbox=(0, 0, 1, 1)))
+    faces.add(FaceEntry(item_id="i2", person_id="p1", bbox=(0, 0, 1, 1)))
+    path = tmp_path / "faces.jsonl"
+    assert faces.save_to_disk(path).is_ok
+
+    reloaded = FaceStore()
+    assert reloaded.load_from_disk(path).danger_ok == 2
+    assert sorted(reloaded.item_ids_for_person("p1")) == ["i1", "i2"]
+    assert len(reloaded.embeddings_for_person("p1")) == 2

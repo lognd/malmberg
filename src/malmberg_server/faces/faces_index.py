@@ -47,6 +47,20 @@ class FaceStore:
 
     def __init__(self) -> None:
         self._faces: dict[str, FaceEntry] = {}
+        self._by_person: dict[str, dict[str, None]] = {}
+        self._by_item: dict[str, dict[str, None]] = {}
+        """face_ids grouped by person and by item.
+
+        The inner dicts are ordered sets -- dict preserves insertion order and
+        gives O(1) add/discard, so a query stays in a stable order without
+        having to walk the whole index to recover one.
+
+        Every query here used to scan all faces. That is cheap once, but
+        PersonStore.assign asks for a person's embeddings *per person, per new
+        face*, which made the worker's sweep quadratic in the size of the face
+        index -- the cost lands exactly when a fresh import is being processed
+        and the index is at its biggest. Maintained by _put/_forget below.
+        """
 
     # ------------------------------------------------------------------
     # Persistence
@@ -68,7 +82,7 @@ class FaceStore:
                     if not line:
                         continue
                     entry = FaceEntry.model_validate_json(line)
-                    self._faces[entry.face_id] = entry
+                    self._put(entry)
                     loaded += 1
             _log.info("Loaded %d faces from %s", loaded, path)
             return Ok(loaded)
@@ -93,11 +107,47 @@ class FaceStore:
 
     # ------------------------------------------------------------------
     # Mutations
+    #
+    # Every write goes through _put/_forget, which is what keeps _by_person and
+    # _by_item honest. Assigning into self._faces anywhere else would desync
+    # them silently, and the symptom (a person missing half their photos) would
+    # look like a clustering bug, not an indexing one.
     # ------------------------------------------------------------------
+
+    def _put(self, entry: FaceEntry) -> None:
+        """Insert or replace *entry*, keeping the person/item indexes in step."""
+        old = self._faces.get(entry.face_id)
+        if old is not None:
+            self._unlink(old)
+        self._faces[entry.face_id] = entry
+        self._by_person.setdefault(entry.person_id, {})[entry.face_id] = None
+        self._by_item.setdefault(entry.item_id, {})[entry.face_id] = None
+
+    def _unlink(self, entry: FaceEntry) -> None:
+        """Drop *entry* from the person/item indexes (not from _faces)."""
+        person = self._by_person.get(entry.person_id)
+        if person is not None:
+            person.pop(entry.face_id, None)
+            if not person:
+                del self._by_person[entry.person_id]
+        item = self._by_item.get(entry.item_id)
+        if item is not None:
+            item.pop(entry.face_id, None)
+            if not item:
+                del self._by_item[entry.item_id]
+
+    def _forget(self, entry: FaceEntry) -> None:
+        """Remove *entry* entirely, keeping the person/item indexes in step."""
+        self._faces.pop(entry.face_id, None)
+        self._unlink(entry)
+
+    def _entries(self, face_ids: dict[str, None]) -> list[FaceEntry]:
+        """Entries for *face_ids*, in the order they joined that person/item."""
+        return [self._faces[fid] for fid in face_ids if fid in self._faces]
 
     def add(self, entry: FaceEntry) -> None:
         """Insert *entry* into the index."""
-        self._faces[entry.face_id] = entry
+        self._put(entry)
 
     def remove_for_item(self, item_id: str) -> list[FaceEntry]:
         """Delete and return all face entries belonging to *item_id*.
@@ -105,9 +155,9 @@ class FaceStore:
         Used by the worker's reprocess path so re-running detection on an
         item does not leave stale/duplicate face records behind.
         """
-        removed = [e for e in self._faces.values() if e.item_id == item_id]
+        removed = self._entries(self._by_item.get(item_id, {}))
         for e in removed:
-            del self._faces[e.face_id]
+            self._forget(e)
         return removed
 
     def remove_for_person(self, person_id: str) -> list[FaceEntry]:
@@ -118,9 +168,9 @@ class FaceStore:
         person whose faces survived would simply reappear on the next
         recluster. The photos themselves are untouched.
         """
-        removed = [e for e in self._faces.values() if e.person_id == person_id]
+        removed = self._entries(self._by_person.get(person_id, {}))
         for e in removed:
-            del self._faces[e.face_id]
+            self._forget(e)
         return removed
 
     def set_person(self, face_id: str, person_id: str) -> bool:
@@ -128,17 +178,15 @@ class FaceStore:
         entry = self._faces.get(face_id)
         if entry is None:
             return False
-        self._faces[face_id] = entry.model_copy(update={"person_id": person_id})
+        self._put(entry.model_copy(update={"person_id": person_id}))
         return True
 
     def reassign_all(self, from_person: str, to_person: str) -> int:
         """Move every face of *from_person* to *to_person*; return the count."""
-        moved = 0
-        for face_id, entry in list(self._faces.items()):
-            if entry.person_id == from_person:
-                self._faces[face_id] = entry.model_copy(update={"person_id": to_person})
-                moved += 1
-        return moved
+        moving = self._entries(self._by_person.get(from_person, {}))
+        for entry in moving:
+            self._put(entry.model_copy(update={"person_id": to_person}))
+        return len(moving)
 
     # ------------------------------------------------------------------
     # Queries
@@ -154,37 +202,36 @@ class FaceStore:
 
     def embeddings_for_person(self, person_id: str) -> list[list[float]]:
         """Return the stored embeddings of every face assigned to *person_id*."""
-        return [e.embedding for e in self._faces.values() if e.person_id == person_id]
+        entries = self._entries(self._by_person.get(person_id, {}))
+        return [e.embedding for e in entries]
 
     def faces_for_person(self, person_id: str) -> list[dict]:
         """Return [{face_id, item_id, bbox}, ...] for *person_id*."""
         return [
             {"face_id": e.face_id, "item_id": e.item_id, "bbox": list(e.bbox)}
-            for e in self._faces.values()
-            if e.person_id == person_id
+            for e in self._entries(self._by_person.get(person_id, {}))
         ]
 
     def faces_for_item(self, item_id: str) -> list[dict]:
         """Return [{face_id, person_id, bbox}, ...] for *item_id*."""
         return [
             {"face_id": e.face_id, "person_id": e.person_id, "bbox": list(e.bbox)}
-            for e in self._faces.values()
-            if e.item_id == item_id
+            for e in self._entries(self._by_item.get(item_id, {}))
         ]
 
     def person_ids_for_item(self, item_id: str) -> list[str]:
         """Return the distinct person ids present in *item_id* (insertion order)."""
         out: list[str] = []
-        for e in self._faces.values():
-            if e.item_id == item_id and e.person_id not in out:
+        for e in self._entries(self._by_item.get(item_id, {})):
+            if e.person_id not in out:
                 out.append(e.person_id)
         return out
 
     def item_ids_for_person(self, person_id: str) -> list[str]:
         """Return the distinct item ids *person_id* appears in (insertion order)."""
         out: list[str] = []
-        for e in self._faces.values():
-            if e.person_id == person_id and e.item_id not in out:
+        for e in self._entries(self._by_person.get(person_id, {})):
+            if e.item_id not in out:
                 out.append(e.item_id)
         return out
 

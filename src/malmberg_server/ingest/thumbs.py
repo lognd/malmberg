@@ -54,19 +54,34 @@ def thumb_path(fs_root: Path, item_id: str, size: int) -> Path:
     return fs_root / ".thumbs" / f"{item_id}_{size}.jpg"
 
 
+def existing_thumbs(fs_root: Path) -> set[str]:
+    """Filenames already in the thumbnail cache.
+
+    One directory listing, rather than a stat() per item per size. The sweep
+    runs every minute against 20k items and 2 sizes, so the naive form was
+    40,000 filesystem round-trips a minute at idle -- on a spinning NAS, for
+    the privilege of learning that there is nothing to do.
+    """
+    thumbs_dir = fs_root / ".thumbs"
+    if not thumbs_dir.is_dir():
+        return set()
+    return {entry.name for entry in thumbs_dir.iterdir() if entry.is_file()}
+
+
 def missing_thumbs(store: MediaStore, fs_root: Path) -> list[tuple[str, int]]:
     """Return (item_id, size) pairs that have no cached thumbnail yet.
 
     Trashed items are skipped: they are not browsable, and warming them would
     re-fill the cache for photos the user just deleted.
     """
+    have = existing_thumbs(fs_root)
     out: list[tuple[str, int]] = []
     for item_id in store.all_ids():
         item = store.get(item_id)
         if item is None or item.trashed_at is not None:
             continue
         for size in WARM_SIZES:
-            if not thumb_path(fs_root, item_id, size).is_file():
+            if thumb_path(fs_root, item_id, size).name not in have:
                 out.append((item_id, size))
     return out
 

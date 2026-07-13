@@ -6,6 +6,7 @@ stats, and places."""
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -33,7 +34,12 @@ def _upload_image(client: TestClient, filename: str = "photo.jpg") -> str:
     buf = BytesIO()
     # Vary the pixel color by filename so repeat calls with different
     # filenames produce distinct sha256 digests (upload dedups by content).
-    color = (abs(hash(filename)) % 200, 20, 30)
+    # hashlib, NOT hash(): the builtin is salted per process, so two filenames
+    # could collide into the same color on some runs, making the second upload
+    # a byte-identical duplicate and failing the test with a 409 roughly one
+    # run in ten.
+    digest = hashlib.sha256(filename.encode()).digest()
+    color = (digest[0], digest[1], digest[2])
     Image.new("RGB", (100, 60), color).save(buf, "JPEG")
     r = client.post("/upload", files={"file": (filename, buf.getvalue(), "image/jpeg")})
     assert r.status_code == 200

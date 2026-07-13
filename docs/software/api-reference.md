@@ -993,8 +993,12 @@ offline, and entirely off the request path.
   they otherwise create spurious singleton people and mis-groupings.
 - **Per-face index:** `malmberg_server.faces.faces_index.FaceStore` persists
   one record per detected face at `logs/faces.jsonl` -- `{face_id, item_id,
-  person_id, bbox, det_score, embedding}`. This is the source of truth for
-  face -> person membership; a `Person`'s centroid/count are always *derived*
+  person_id, bbox, det_score, embedding}`. It carries face_id indexes by person
+  and by item (maintained by `_put`/`_forget`, the sole write path): every query
+  used to scan all faces, and since `PersonStore.assign` asks for a person's
+  embeddings *per person, per new face*, that made the worker's sweep quadratic
+  in the size of the face index -- worst exactly when a fresh import is being
+  processed. This is the source of truth for face -> person membership; a `Person`'s centroid/count are always *derived*
   from it, which is what makes order-independent reclustering and per-face
   overrides recompute cleanly.
 - **Background processing, never inline:** `malmberg_server.faces.worker`
