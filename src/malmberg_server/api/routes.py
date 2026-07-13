@@ -19,6 +19,7 @@ from malmberg_core import __version__
 from malmberg_core.logging import get_logger
 from malmberg_core.models import HidePolicy, MediaItem, MediaPage, Tag
 from malmberg_core.networking import get_mac_address
+from malmberg_server.api.compress import TextOnlyGZipMiddleware
 from malmberg_server.api.web import DASHBOARD_PAGE_HTML
 from malmberg_server.app.config import ServerConfig
 from malmberg_server.cloud.base import CloudError, CloudProvider
@@ -209,6 +210,30 @@ def _raise_ingest(err: IngestError) -> None:
     raise HTTPException(status_code=status, detail=detail)
 
 
+_IMMUTABLE_MAX_AGE_S = 31_536_000
+"""One year: the cap browsers honour, and the right answer for a URL that can
+never change meaning."""
+
+_UNVERSIONED_MAX_AGE_S = 300
+"""Five minutes for a URL with no content digest in it. Long enough to survive
+paging back and forth; short enough that an edit to an item the dashboard could
+not version-stamp shows up on its own."""
+
+
+def _cache_headers(v: Optional[str]) -> dict[str, str]:
+    """Cache-Control for a media/thumbnail response, given its ``?v=`` digest.
+
+    The dashboard stamps every image URL with a prefix of the file's SHA-256, so
+    a rewrite (rotate/flip) is a different URL: those bytes are immutable and the
+    browser should never ask for them twice. Without this, turning the page
+    refetched all 24 thumbnails from the NAS every time -- including pages the
+    user had just looked at, and the ones the prefetcher had already fetched.
+    """
+    if v:
+        return {"Cache-Control": f"public, max-age={_IMMUTABLE_MAX_AGE_S}, immutable"}
+    return {"Cache-Control": f"public, max-age={_UNVERSIONED_MAX_AGE_S}"}
+
+
 def _parse_manual_date(raw: str) -> datetime:
     """Parse *raw* (``YYYY-MM-DD`` or full ISO datetime) into a UTC datetime.
 
@@ -273,6 +298,12 @@ def build_app(
     /people and /faces endpoints without running the background worker).
     """
     app = FastAPI(title="Malmberg Server", version=__version__)
+    # The dashboard HTML and the per-page JSON are compressible text served over
+    # house Wi-Fi; the photo bytes are not (see api/compress). Level 6, not
+    # Starlette's default 9: on the NAS's CPU the last few percent are not worth
+    # the extra pass. The minimum size keeps gzip off the tiny control acks,
+    # where it would be pure latency.
+    app.add_middleware(TextOnlyGZipMiddleware, minimum_size=1024, compresslevel=6)
     _start = datetime.now(timezone.utc)
     _store = store if store is not None else MediaStore()
     _playlists = PlaylistStore()
@@ -706,7 +737,10 @@ def build_app(
         return _store.list_trash(page=page, page_size=page_size)
 
     @app.get("/media/{item_id}")
-    async def get_media(item_id: str) -> FileResponse:
+    async def get_media(
+        item_id: str,
+        v: Optional[str] = Query(default=None),
+    ) -> FileResponse:
         item = _store.get(item_id, media_root=_media_root())
         if item is None:
             raise HTTPException(status_code=404, detail="Media item not found")
@@ -717,7 +751,7 @@ def build_app(
         path = _item_file_root(item) / item.server_path
         if not path.is_file():
             raise HTTPException(status_code=404, detail="File not found on disk")
-        return FileResponse(str(path))
+        return FileResponse(str(path), headers=_cache_headers(v))
 
     @app.get("/media/{item_id}/info")
     async def media_info(item_id: str) -> dict:
@@ -735,6 +769,7 @@ def build_app(
     async def media_thumb(
         item_id: str,
         size: int = Query(default=400, ge=64, le=1024),
+        v: Optional[str] = Query(default=None),
     ) -> FileResponse:
         """Serve a cached JPEG thumbnail for the item (generated on first request)."""
         item = _store.get(item_id)
@@ -748,7 +783,9 @@ def build_app(
             result = make_thumbnail(src, dest, size, is_video=item.kind == "video")
             if result.is_err:
                 _raise_ingest(result.danger_err)
-        return FileResponse(str(dest), media_type="image/jpeg")
+        return FileResponse(
+            str(dest), media_type="image/jpeg", headers=_cache_headers(v)
+        )
 
     @app.get("/upload")
     async def upload_page() -> RedirectResponse:

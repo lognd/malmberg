@@ -204,3 +204,65 @@ async def test_delete_not_found(tmp_path: Path) -> None:
     async with asgi_client(build_app(cfg, store)) as c:
         r = await c.delete("/media/ghost")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Caching and compression (what makes paging the library fast)
+# ---------------------------------------------------------------------------
+
+
+async def test_thumb_versioned_url_is_immutable(tmp_path: Path) -> None:
+    """A ?v=<digest> thumb URL is content-addressed, so the browser may keep it
+    forever rather than refetching it on every page turn."""
+    cfg, store = _setup_server(tmp_path)
+    png = _make_png()
+    async with asgi_client(build_app(cfg, store)) as c:
+        up = await c.post("/upload", files={"file": ("img.png", png, "image/png")})
+        item_id = up.json()["id"]
+        r = await c.get(f"/media/{item_id}/thumb", params={"v": "abc123def456"})
+    assert r.status_code == 200
+    assert "immutable" in r.headers["cache-control"]
+
+
+async def test_thumb_unversioned_url_is_not_immutable(tmp_path: Path) -> None:
+    """Without a digest in the URL, the same path could later mean different
+    bytes (a rotate), so it only gets a short freshness window."""
+    cfg, store = _setup_server(tmp_path)
+    png = _make_png()
+    async with asgi_client(build_app(cfg, store)) as c:
+        up = await c.post("/upload", files={"file": ("img.png", png, "image/png")})
+        item_id = up.json()["id"]
+        r = await c.get(f"/media/{item_id}/thumb")
+    assert r.status_code == 200
+    assert "immutable" not in r.headers["cache-control"]
+
+
+async def test_media_listing_is_gzipped(tmp_path: Path) -> None:
+    cfg, store = _setup_server(tmp_path)
+    async with asgi_client(build_app(cfg, store)) as c:
+        for i in range(10):
+            png = _make_png(w=i + 5, h=i + 5)
+            await c.post("/upload", files={"file": (f"img{i}.png", png, "image/png")})
+        r = await c.get(
+            "/media", params={"page_size": 10}, headers={"Accept-Encoding": "gzip"}
+        )
+    assert r.status_code == 200
+    assert r.headers.get("content-encoding") == "gzip"
+    assert r.json()["total"] == 10
+
+
+async def test_photo_bytes_are_not_gzipped(tmp_path: Path) -> None:
+    """JPEG/MP4 bytes do not compress; gzipping them would burn the NAS's CPU on
+    the request path and drop the Content-Length that video seeking needs."""
+    cfg, store = _setup_server(tmp_path)
+    png = _make_png(w=600, h=600)
+    async with asgi_client(build_app(cfg, store)) as c:
+        up = await c.post("/upload", files={"file": ("img.png", png, "image/png")})
+        item_id = up.json()["id"]
+        full = await c.get(f"/media/{item_id}", headers={"Accept-Encoding": "gzip"})
+        thumb = await c.get(
+            f"/media/{item_id}/thumb", headers={"Accept-Encoding": "gzip"}
+        )
+    assert full.headers.get("content-encoding") is None
+    assert full.headers.get("content-length") is not None
+    assert thumb.headers.get("content-encoding") is None
