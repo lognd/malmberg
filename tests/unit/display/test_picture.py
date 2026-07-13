@@ -138,3 +138,41 @@ async def test_display_releases_frame(tmp_path: Path) -> None:
     )
     await display.display(ctx)
     assert display._frame is None
+
+
+# ---------------------------------------------------------------------------
+# Caption location precedence
+# ---------------------------------------------------------------------------
+
+
+def test_caption_prefers_server_place_over_geocoder() -> None:
+    """A server-supplied place wins; no local geocoder call is made."""
+    from malmberg_display.display.overlay import ImageCaption
+
+    def boom(lat: float, lon: float) -> str:
+        raise AssertionError("geocoder must not be called when place is known")
+
+    cap = ImageCaption.from_metadata(
+        None, 27.97, -82.53, None, place="Tampa, Florida, US", geocoder=boom
+    )
+    assert cap.location_label == "Tampa, Florida, US"
+
+
+def test_caption_falls_back_to_coordinates_without_place() -> None:
+    """With no server place and no working geocoder, show decimal coordinates."""
+    from malmberg_display.display.overlay import ImageCaption
+
+    cap = ImageCaption.from_metadata(None, 27.97, -82.53, None)
+    assert cap.location_label == "27.97 N  82.53 W"
+
+    # An empty/whitespace place from the server is treated as absent.
+    cap2 = ImageCaption.from_metadata(None, 27.97, -82.53, None, place="  ")
+    assert cap2.location_label == "27.97 N  82.53 W"
+
+
+def test_caption_place_without_coordinates() -> None:
+    """A manually-tagged place with no GPS fix still captions the photo."""
+    from malmberg_display.display.overlay import ImageCaption
+
+    cap = ImageCaption.from_metadata(None, None, None, None, place="Grandma's house")
+    assert cap.location_label == "Grandma's house"

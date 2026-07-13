@@ -101,7 +101,10 @@ class PictureDisplay(Displayable):
     taken_at:
         EXIF date/time the photo was taken; shown in the caption overlay.
     lat, lon:
-        GPS coordinates for reverse-geocoding; shown in the caption overlay.
+        GPS coordinates, used only as a fallback when *place* is absent.
+    place:
+        Place label already reverse-geocoded by the server; preferred over
+        *lat*/*lon* for the caption overlay.
     camera_model:
         EXIF camera model string; shown in the caption overlay.
     dwell_override_s:
@@ -115,6 +118,7 @@ class PictureDisplay(Displayable):
         taken_at: Optional[Any] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
+        place: Optional[str] = None,
         camera_model: Optional[str] = None,
         dwell_override_s: Optional[float] = None,
     ) -> None:
@@ -125,6 +129,7 @@ class PictureDisplay(Displayable):
         self._taken_at = taken_at
         self._lat = lat
         self._lon = lon
+        self._place = place
         self._camera_model = camera_model
         self._caption: Optional[ImageCaption] = None
         self._dwell_override_s = dwell_override_s
@@ -170,6 +175,7 @@ class PictureDisplay(Displayable):
                 lat=self._lat,
                 lon=self._lon,
                 camera_model=self._camera_model,
+                place=self._place,
                 geocoder=ctx.geocoder,
             ),
         )

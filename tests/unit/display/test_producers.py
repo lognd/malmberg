@@ -24,6 +24,31 @@ def test_cached_item_properties(tmp_path: Path) -> None:
     assert item.item_id == "abc123"
 
 
+@pytest.mark.asyncio
+async def test_item_from_raw_carries_server_place(tmp_path: Path) -> None:
+    """The server's reverse-geocoded place reaches the item's caption fields.
+
+    Only the server has the offline geocoder dataset, so if this stops being
+    read the frame silently degrades to bare decimal coordinates.
+    """
+    producer = ServerProducer("http://s", tmp_path, MagicMock())
+    raw = {
+        "id": "id1",
+        "filename": "photo.jpg",
+        "meta": {
+            "sha256": "deadbeef0000",
+            "effective_taken_at": "2006-07-04T12:00:00+00:00",
+            "effective_lat": 27.97,
+            "effective_lon": -82.53,
+            "effective_place": "Tampa, Florida, US",
+        },
+    }
+    item = await producer._item_from_raw(raw)
+    assert item is not None
+    assert item._place == "Tampa, Florida, US"
+    assert item._lat == 27.97
+
+
 # ---------------------------------------------------------------------------
 # CacheProducer -- scan mode
 # ---------------------------------------------------------------------------

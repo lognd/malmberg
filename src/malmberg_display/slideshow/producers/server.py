@@ -38,6 +38,7 @@ class CachedItem(Displayable):
         taken_at: Optional[datetime] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
+        place: Optional[str] = None,
         camera_model: Optional[str] = None,
         dwell_override_s: Optional[float] = None,
     ) -> None:
@@ -47,6 +48,7 @@ class CachedItem(Displayable):
         self._taken_at = taken_at
         self._lat = lat
         self._lon = lon
+        self._place = place
         self._camera_model = camera_model
         self._dwell_override_s = dwell_override_s
         self._delegate: Optional["Displayable"] = None
@@ -78,6 +80,7 @@ class CachedItem(Displayable):
                 taken_at=self._taken_at,
                 lat=self._lat,
                 lon=self._lon,
+                place=self._place,
                 camera_model=self._camera_model,
                 dwell_override_s=self._dwell_override_s,
             )
@@ -341,11 +344,14 @@ class ServerProducer:
             """Ensure the file is on disk; called from CachedItem.load()."""
             return await self._ensure_cached(item_id, filename, cached)
 
-        # effective_taken_at/effective_lat/effective_lon (computed server-side
-        # from MediaMetadata) prefer a manual override over raw EXIF, so a
-        # manually-dated/-located photo shows the right caption on the frame
-        # with no display-side changes needed beyond reading these fields
-        # instead of the raw taken_at/lat/lon.
+        # effective_taken_at/effective_lat/effective_lon/effective_place
+        # (computed server-side from MediaMetadata) prefer a manual override
+        # over raw EXIF, so a manually-dated/-located photo shows the right
+        # caption on the frame with no display-side changes needed beyond
+        # reading these fields instead of the raw taken_at/lat/lon/place.
+        # effective_place is the reverse-geocoded label: only the server has
+        # the offline geocoder dataset, so without it the frame can only show
+        # bare decimal coordinates.
         taken_at: Optional[datetime] = None
         if ts := meta.get("effective_taken_at"):
             try:
@@ -359,6 +365,7 @@ class ServerProducer:
             taken_at=taken_at,
             lat=meta.get("effective_lat"),
             lon=meta.get("effective_lon"),
+            place=meta.get("effective_place"),
             camera_model=meta.get("camera_model"),
             dwell_override_s=raw.get("dwell_override_s"),
         )

@@ -268,7 +268,9 @@ from malmberg_display.display.proto import Displayable, LoadContext, DisplayCont
 - `LoadContext` -- shared across all `load()` calls within a session.
   - `cache_dir: Path` -- where to store downloaded / transcoded media.
   - `geocoder: Optional[Callable]` -- optional `(lat, lon) -> str | None` for
-    reverse-geocoding GPS coordinates into a human-readable place name.
+    reverse-geocoding GPS coordinates into a human-readable place name. Only a
+    fallback: items served by the server already carry its offline-geocoded
+    `meta.effective_place`, which wins.
 - `DisplayContext` -- shared across all `display()` calls within a session.
   - `screen` -- pygame `Surface` or `None` if not yet initialised.
   - `mpv_player` -- mpv `MPV` instance or `None`.
@@ -298,7 +300,10 @@ the image content:
   `scrim_alpha`, `margin`, `line_spacing`.
 - `ImageCaption` -- per-image metadata holder: `date_label`, `location_label`,
   `camera_label`. Build with `ImageCaption.from_metadata(taken_at, lat, lon,
-  camera_model, geocoder=...)`.
+  camera_model, place=..., geocoder=...)`. Location precedence: the server's
+  reverse-geocoded `place` (from `meta.effective_place`, the only source that
+  reliably yields a real place name -- the Pi has no geocoder dataset), then
+  the local `geocoder`, then decimal coordinates.
 - `OverlayRenderer(cfg)` -- call `render(surface, w, h, caption)` to draw both
   regions at once, or `render_clock` / `render_caption` individually.
 - `make_geocoder(cache_dir=None) -> Callable | None` -- returns a `(lat, lon) -> str`

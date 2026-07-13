@@ -186,13 +186,20 @@ class ImageCaption:
         lon: Optional[float],
         camera_model: Optional[str],
         *,
+        place: Optional[str] = None,
         geocoder: Optional[Any] = None,
     ) -> "ImageCaption":
         """Build a caption from raw EXIF fields.
 
-        *geocoder* is an optional callable `(lat, lon) -> str | None`; if
-        supplied it is called synchronously (wrap in run_in_executor at the
-        call site if needed).
+        *place* is the place label the server already reverse-geocoded for this
+        item (MediaMetadata.effective_place). It wins over everything else: the
+        server has the offline geocoder dataset and the Pi does not, so this is
+        the only source that reliably produces a real place name on the frame.
+
+        *geocoder* is an optional fallback callable `(lat, lon) -> str | None`
+        for items with coordinates but no server-side label; if supplied it is
+        called synchronously (wrap in run_in_executor at the call site if
+        needed). With neither, coordinates are shown in decimal form.
         """
         date_label: Optional[str] = None
         if taken_at is not None:
@@ -200,8 +207,8 @@ class ImageCaption:
             local_dt = taken_at.astimezone()
             date_label = local_dt.strftime("%B %-d, %Y")
 
-        location_label: Optional[str] = None
-        if lat is not None and lon is not None:
+        location_label: Optional[str] = (place or "").strip() or None
+        if location_label is None and lat is not None and lon is not None:
             if geocoder is not None:
                 try:
                     location_label = geocoder(lat, lon)
