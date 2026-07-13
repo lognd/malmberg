@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import random
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -863,3 +865,52 @@ def test_make_thumbnail_video_poster_falls_back_on_bad_file(tmp_path: Path) -> N
 
     out = Image.open(dest)
     assert out.size == (96, 96)
+
+
+def test_gazetteer_index_agrees_with_an_exhaustive_scan() -> None:
+    """The cell index is an optimization, so it must change nothing.
+
+    The lookup used to scan all 225k places per photo, which turned a
+    12,760-photo re-geocode sweep into 3 billion distance computations on a
+    4-core NAS. Bucketing into 1-degree cells made it ~450x faster; this pins
+    that it still picks the same place, including at the poles and across the
+    antimeridian, where the cell arithmetic is easy to get subtly wrong.
+    """
+    np = pytest.importorskip("numpy")
+    gazetteer.configure(None)
+    xyz, pop, places, _cells = gazetteer._build_index()
+
+    def exhaustive(lat: float, lon: float):
+        rlat, rlon = math.radians(lat), math.radians(lon)
+        probe = np.array(
+            [
+                math.cos(rlat) * math.cos(rlon),
+                math.cos(rlat) * math.sin(rlon),
+                math.sin(rlat),
+            ]
+        )
+        dot = np.clip(xyz @ probe, -1.0, 1.0)
+        nearest = int(np.argmax(dot))
+        km = float(np.arccos(dot[nearest])) * gazetteer._EARTH_R_KM
+        if km > gazetteer._CANDIDATE_KM:
+            return None
+        cutoff = math.cos((km + gazetteer._NEARBY_SLACK_KM) / gazetteer._EARTH_R_KM)
+        near = np.flatnonzero(dot >= cutoff)
+        dominant = near[
+            pop[near] > max(float(pop[nearest]) * gazetteer._DOMINANCE, 0.0)
+        ]
+        if dominant.size:
+            best = dominant[int(np.lexsort((-dot[dominant], -pop[dominant]))[0])]
+            return places[int(best)]
+        return places[nearest]
+
+    rng = random.Random(7)
+    probes = [(rng.uniform(-85.0, 85.0), rng.uniform(-180.0, 180.0)) for _ in range(60)]
+    probes += [(78.22, 15.65), (-16.5, -179.9), (1.19, 104.10), (-89.0, 179.99)]
+    for lat, lon in probes:
+        got = gazetteer.lookup(lat, lon)
+        want = exhaustive(lat, lon)
+        assert (got.label if got else None) == (want.label if want else None), (
+            lat,
+            lon,
+        )

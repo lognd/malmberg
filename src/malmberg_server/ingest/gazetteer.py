@@ -191,12 +191,17 @@ def _load() -> list[Place]:
     return _places
 
 
-def _xyz_index() -> Any:
-    """Unit-sphere coordinates and populations of every place, as numpy arrays.
+def _build_index() -> Any:
+    """Build the spatial index: unit-sphere coords, populations, and a grid.
 
-    Distance is computed vectorized over the whole dataset (225k rows is a few
-    milliseconds), which keeps this one dependency-light array lookup instead of
-    a spatial-index library.
+    Scanning all 225k rows per photo is ~9 ms idle, which sounds fine until the
+    server re-geocodes 12,760 photos while the face worker and thumbnail warmer
+    are already saturating a 4-core NAS -- then it is 3 billion distance
+    computations fighting for cores, and the sweep crawls.
+
+    So places are bucketed into 1-degree lat/lon cells. A lookup only measures
+    the handful of cells that could hold something within `_CANDIDATE_KM`,
+    which is a few hundred candidates instead of 225k.
     """
     global _index
     if _index is not None:
@@ -218,23 +223,68 @@ def _xyz_index() -> Any:
     xyz = np.stack(
         [np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)], axis=1
     )
-    _index = (xyz, pop, places)
+    cells: dict[tuple[int, int], list[int]] = {}
+    for i, place in enumerate(places):
+        cells.setdefault(_cell(place.lat, place.lon), []).append(i)
+    _index = (xyz, pop, places, cells)
+    _log.info("Gazetteer index built: %d places in %d cells", len(places), len(cells))
     return _index
+
+
+def _cell(lat: float, lon: float) -> tuple[int, int]:
+    """The 1-degree grid cell a coordinate falls in."""
+    return (math.floor(lat), math.floor(lon))
+
+
+def _candidate_ids(cells: dict, lat: float, lon: float) -> list[int]:
+    """Indices of every place in the cells that could hold a hit near (lat, lon).
+
+    The latitude span is fixed, but a degree of longitude shrinks towards the
+    poles -- so the longitude span is widened by 1/cos(lat), and near the poles
+    (or across the +/-180 seam) we simply take every longitude rather than get
+    the wraparound subtly wrong.
+    """
+    span_lat = int(math.ceil(_CANDIDATE_KM / 111.0)) + 1
+    cos_lat = math.cos(math.radians(lat))
+    if cos_lat < 0.05:
+        lon_cells = range(-180, 180)
+    else:
+        span_lon = int(math.ceil(_CANDIDATE_KM / (111.0 * cos_lat))) + 1
+        lon_cells = range(-span_lon, span_lon + 1)
+    base_lat, base_lon = _cell(lat, lon)
+    out: list[int] = []
+    for dlat in range(-span_lat, span_lat + 1):
+        for dlon in lon_cells:
+            # Wrap longitude at the antimeridian; clamp latitude (there is no
+            # cell past the pole).
+            clat = base_lat + dlat
+            if clat < -90 or clat > 89:
+                continue
+            clon = base_lon + dlon if cos_lat >= 0.05 else dlon
+            clon = ((clon + 180) % 360) - 180
+            hit = cells.get((clat, clon))
+            if hit:
+                out.extend(hit)
+    return out
 
 
 def lookup(lat: float, lon: float) -> Optional[Place]:
     """Return the most significant place near (*lat*, *lon*), or None.
 
-    "Most significant" = the largest population among the places within
-    `_NEARBY_SLACK_KM` of the closest one; see the module docstring for why that
-    beats plain nearest-city in both directions.
+    The closest place wins by default; a neighbour within `_NEARBY_SLACK_KM`
+    takes the label only by being `_DOMINANCE` times bigger. See the module
+    docstring for why that beats plain nearest-city in both directions.
     """
-    index = _xyz_index()
+    index = _build_index()
     if index is None:
         return None
     import numpy as np
 
-    xyz, pop, places = index
+    xyz, pop, places, cells = index
+    ids = _candidate_ids(cells, lat, lon)
+    if not ids:
+        return None
+    idx = np.fromiter(ids, int, len(ids))
     rlat, rlon = math.radians(lat), math.radians(lon)
     probe = np.array(
         [
@@ -244,34 +294,33 @@ def lookup(lat: float, lon: float) -> Optional[Place]:
         ]
     )
     # Rank by the dot product with the probe -- a monotone stand-in for
-    # great-circle distance -- so the whole-array pass is one matrix multiply.
-    # The two arccos calls needed to turn a distance cutoff back into a dot
-    # cutoff are O(1); doing the conversion the other way (arccos over all 225k
-    # rows) is what made this 100 ms instead of 5 ms.
-    dot = np.clip(xyz @ probe, -1.0, 1.0)
+    # great-circle distance -- over the candidate cells only.
+    dot = np.clip(xyz[idx] @ probe, -1.0, 1.0)
+    cand_pop = pop[idx]
+
     nearest = int(np.argmax(dot))
     nearest_km = float(np.arccos(dot[nearest])) * _EARTH_R_KM
     if nearest_km > _CANDIDATE_KM:
         return None
     # The user's own places are exempt from the dominance rule below: they are
     # in the file precisely because no city on the map is what the photo is of.
-    if places[nearest].custom:
-        return places[nearest]
+    if places[int(idx[nearest])].custom:
+        return places[int(idx[nearest])]
+
     cutoff_dot = math.cos((nearest_km + _NEARBY_SLACK_KM) / _EARTH_R_KM)
     near = np.flatnonzero(dot >= cutoff_dot)
-    # Ties inside the cutoff are broken by distance, i.e. by *descending* dot.
-    dist_km = -dot
     # The closest place is the default. A neighbour only takes the label off it
     # by being _DOMINANCE times bigger -- a city swallowing its own districts,
     # not a town swallowing the town next door. (A base population of 0 -- an
     # unpopulated entry -- is dominated by anything populated, which is how
     # Sekupang's photos end up saying Batam.)
-    threshold = pop[nearest] * _DOMINANCE
-    dominant = near[pop[near] > max(threshold, 0.0)]
+    threshold = cand_pop[nearest] * _DOMINANCE
+    dominant = near[cand_pop[near] > max(float(threshold), 0.0)]
     if dominant.size:
-        best = dominant[int(np.lexsort((dist_km[dominant], -pop[dominant]))[0])]
-        return places[int(best)]
-    return places[nearest]
+        # Ties inside the cutoff are broken by distance, i.e. by descending dot.
+        best = dominant[int(np.lexsort((-dot[dominant], -cand_pop[dominant]))[0])]
+        return places[int(idx[best])]
+    return places[int(idx[nearest])]
 
 
 def reverse_geocode(lat: float | None, lon: float | None) -> str | None:
