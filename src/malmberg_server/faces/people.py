@@ -299,6 +299,24 @@ class PersonStore:
         _log.info("Merged person %s into %s (%d faces)", from_id, into_id, moved)
         return Ok(self._people[into_id])
 
+    def delete(self, person_id: str, faces: FaceStore) -> Result[int, str]:
+        """Delete *person_id* and every face belonging to it; return the count.
+
+        For a junk cluster (a stranger in the background, a false positive):
+        the grouping and its face embeddings go away, the photos stay. The
+        faces must go too or recluster() would rebuild the person from them.
+
+        Not permanent against a face-pipeline version bump: reprocessing an
+        item re-detects its faces from the photo itself, so the group can come
+        back. That is the honest trade for keeping the photos.
+        """
+        if person_id not in self._people:
+            return Err(PersonError.NOT_FOUND)
+        removed = faces.remove_for_person(person_id)
+        del self._people[person_id]
+        _log.info("Deleted person %s (%d faces dropped)", person_id, len(removed))
+        return Ok(len(removed))
+
     def rename(self, person_id: str, name: str) -> Result[Person, str]:
         """Assign or change the display name of *person_id*."""
         person = self._people.get(person_id)

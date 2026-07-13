@@ -110,6 +110,19 @@ class FaceStore:
             del self._faces[e.face_id]
         return removed
 
+    def remove_for_person(self, person_id: str) -> list[FaceEntry]:
+        """Delete and return every face entry assigned to *person_id*.
+
+        Backs "delete this person": the embeddings must go, not just the
+        Person record. recluster() rebuilds people from the face index, so a
+        person whose faces survived would simply reappear on the next
+        recluster. The photos themselves are untouched.
+        """
+        removed = [e for e in self._faces.values() if e.person_id == person_id]
+        for e in removed:
+            del self._faces[e.face_id]
+        return removed
+
     def set_person(self, face_id: str, person_id: str) -> bool:
         """Reassign *face_id* to *person_id*. Returns False if unknown."""
         entry = self._faces.get(face_id)

@@ -563,7 +563,12 @@ def build_app(
         out = []
         for face in _faces.faces_for_person(person_id):
             item = _store.get(face["item_id"])
-            if item is None:
+            # A trashed photo keeps its face entries (they are needed if it is
+            # restored), but it must not show up in review -- deleting a photo
+            # from the review grid has to make it leave the grid. The person's
+            # displayed count already excludes trashed items
+            # (MediaStore.counts_by_person), so this also keeps the two in step.
+            if item is None or item.trashed_at is not None:
                 continue
             out.append(
                 {
@@ -575,6 +580,21 @@ def build_app(
                 }
             )
         return out
+
+    @app.delete("/people/{person_id}")
+    async def delete_person(person_id: str) -> dict:
+        """Delete a person group and its faces; the photos are kept.
+
+        For a junk cluster (a stranger, a false positive) the user wants gone
+        from the People grid. The face embeddings go with it -- see
+        PersonStore.delete for why, and for the version-bump caveat.
+        """
+        result = _people.delete(person_id, _faces)
+        if result.is_err:
+            raise HTTPException(status_code=404, detail="Person not found")
+        sync_person_ids(_store, _faces)
+        _save_faces_state()
+        return {"status": "deleted", "person_id": person_id, "faces": result.danger_ok}
 
     @app.post("/people/{person_id}/merge")
     async def merge_people(person_id: str, body: PersonMergeRequest) -> dict:

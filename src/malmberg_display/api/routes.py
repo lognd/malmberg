@@ -430,6 +430,11 @@ def build_app(
         body = await request.json()
         return await _proxy_json("POST", f"/people/{person_id}/name", json=body)
 
+    @app.delete("/people/{person_id}")
+    async def proxy_delete_person(person_id: str) -> object:
+        """Proxy: delete a person group (and its faces) on the paired server."""
+        return await _proxy_json("DELETE", f"/people/{person_id}")
+
     @app.post("/people/{person_id}/merge")
     async def proxy_merge_people(person_id: str, request: Request) -> object:
         """Proxy: merge another person into *person_id*."""

@@ -531,6 +531,50 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     font-size: 0.85rem;
     font-weight: 700;
   }
+  /* Deleting is deliberately the quietest control on both the person card and
+     the review face card: it sits below the primary action, small and
+     outlined, so it is reachable but never the thing you hit by accident. */
+  .review-face .review-more-btn {
+    width: 100%;
+    margin-top: 0.4rem;
+    min-height: 40px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .review-face .review-more-btn:hover,
+  .review-face .review-more-btn:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+    outline: none;
+  }
+  .person-card .person-delete-btn,
+  .review-face .review-delete-btn {
+    width: 100%;
+    margin-top: 0.4rem;
+    min-height: 40px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--err);
+    background: transparent;
+    border: 1px solid var(--err);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .person-card .person-delete-btn:hover,
+  .person-card .person-delete-btn:focus-visible,
+  .review-face .review-delete-btn:hover,
+  .review-face .review-delete-btn:focus-visible {
+    opacity: 1;
+    outline: none;
+  }
   /* Review modal (per-person face review + green boxes + overrides) */
   #review-backdrop {
     position: fixed;
@@ -3708,6 +3752,32 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     editInput.addEventListener("keydown", function (ev) {
       if (ev.key === "Enter") saveEditedName();
     });
+
+    /* Delete the grouping, not the photos -- for a stranger in the
+       background or a false positive that should not be in the People
+       grid at all. Spelled out in the confirm, because "delete" next to a
+       face reads as "delete the photos" unless you say otherwise. */
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "person-delete-btn";
+    delBtn.textContent = "Delete this person";
+    delBtn.addEventListener("click", function () {
+      var who = person.name || "this unnamed person";
+      if (!window.confirm(
+        "Remove " + who + " from the People list?\\n\\n"
+        + "The " + person.count + " photo(s) are NOT deleted -- only the "
+        + "grouping of these faces goes away."
+      )) return;
+      fetch("/people/" + person.id, { method: "DELETE" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("failed");
+          showToast("Removed " + who + " from the People list.", "ok");
+          if (reviewPerson && reviewPerson.id === person.id) closeReview();
+          loadPeople(); loadStats(); refreshPersonDatalists();
+        })
+        .catch(function () { showToast("Could not delete.", "err"); });
+    });
+    card.appendChild(delBtn);
     return card;
   }
 
@@ -3829,6 +3899,39 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
         .catch(function () { showToast("Could not update.", "err"); });
     });
     wrap.appendChild(detach);
+
+    /* Delete the photo itself, from right here -- reviewing a person is
+       exactly when you notice the junk shots. Soft delete: it goes to the
+       recycle bin, same as deleting from the grid, and is restorable. */
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "review-delete-btn";
+    del.textContent = "Delete photo";
+    del.addEventListener("click", function () {
+      if (!window.confirm(
+        "Delete this photo?\\n\\nIt goes to the recycle bin and can be "
+        + "restored from there."
+      )) return;
+      fetch("/media/" + row.item_id, { method: "DELETE" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("failed");
+          showToast("Photo moved to the recycle bin.", "ok");
+          openReview(reviewPerson); loadPeople(); loadStats(); loadGrid();
+        })
+        .catch(function () { showToast("Could not delete the photo.", "err"); });
+    });
+    wrap.appendChild(del);
+
+    /* Everything else you can do to a photo (rotate, flip, tag its date and
+       place, play it on the frame) already lives in the item modal, which
+       stacks above this one -- so open that rather than growing a second set
+       of controls here that would drift out of step with it. */
+    var more = document.createElement("button");
+    more.type = "button";
+    more.className = "review-more-btn";
+    more.textContent = "Photo options (rotate, flip...)";
+    more.addEventListener("click", function () { openModal(row.item_id); });
+    wrap.appendChild(more);
     return wrap;
   }
 
@@ -4598,6 +4701,10 @@ _DASHBOARD_PAGE_TEMPLATE = """<!doctype html>
     modalBackdrop.className = "";
     modalItem = null;
     modalVideo.pause();
+    // The review modal may be open underneath (the item modal stacks above
+    // it). Rotating or deleting from there changes what review should show,
+    // so re-render it rather than leave a stale thumbnail or a dead photo.
+    if (reviewPerson) { openReview(reviewPerson); loadPeople(); }
   }
 
   modalClose.addEventListener("click", closeModal);

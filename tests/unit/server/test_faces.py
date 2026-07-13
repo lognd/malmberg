@@ -500,3 +500,100 @@ def test_endpoint_people_name_validation(tmp_path: Path) -> None:
     )
     ok = client.post(f"/people/{p_grandma}/name", json={"name": "Nana"})
     assert ok.status_code == 200 and ok.json()["name"] == "Nana"
+
+
+# ---------------------------------------------------------------------------
+# PersonStore.delete: drop a junk cluster, keep the photos
+# ---------------------------------------------------------------------------
+
+
+def test_delete_person_drops_faces_and_person() -> None:
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    p2 = _assign(people, faces, _unit([0, 1, 0]), "i2")
+
+    result = people.delete(p1, faces)
+    assert result.is_ok
+    assert result.danger_ok == 1
+    assert people.get(p1) is None
+    assert people.get(p2) is not None
+    # The other person's faces are untouched; the deleted one's are gone.
+    assert [e.person_id for e in faces.all()] == [p2]
+
+
+def test_delete_person_survives_recluster() -> None:
+    """The faces must go, not just the Person: recluster rebuilds people from
+    the face index, so a person whose embeddings survived would come back."""
+    people, faces = PersonStore(), FaceStore()
+    p1 = _assign(people, faces, _unit([1, 0, 0]), "i1")
+    _assign(people, faces, _unit([0, 1, 0]), "i2")
+
+    assert people.delete(p1, faces).is_ok
+    people.recluster(faces)
+    assert people.get(p1) is None
+    assert len(people) == 1
+
+
+def test_delete_unknown_person() -> None:
+    people, faces = PersonStore(), FaceStore()
+    assert people.delete("nope", faces).is_err
+
+
+def test_face_store_remove_for_person() -> None:
+    faces = FaceStore()
+    faces.add(FaceEntry(item_id="i1", person_id="p1", bbox=(0, 0, 1, 1)))
+    faces.add(FaceEntry(item_id="i2", person_id="p1", bbox=(0, 0, 1, 1)))
+    faces.add(FaceEntry(item_id="i1", person_id="p2", bbox=(2, 2, 3, 3)))
+    removed = faces.remove_for_person("p1")
+    assert len(removed) == 2
+    assert [e.person_id for e in faces.all()] == ["p2"]
+
+
+# ---------------------------------------------------------------------------
+# Group photos: every person in the photo gets it
+# ---------------------------------------------------------------------------
+
+
+def test_group_photo_lands_under_every_person(tmp_path: Path, monkeypatch) -> None:
+    """A photo with three faces is filed under all three people, not just one.
+
+    This is what makes a group shot findable from any of its people: each
+    face is assigned independently, MediaItem.person_ids collects all of
+    them, and the per-person photo count credits the photo to each.
+    """
+    store, people, faces = MediaStore(), PersonStore(), FaceStore()
+    media_root = tmp_path / "media"
+    (media_root / "p").mkdir(parents=True)
+    (media_root / "p" / "i1.jpg").write_bytes(b"x")
+    store.add(_make_item("i1"))
+
+    monkeypatch.setattr(
+        worker_mod,
+        "detect_faces",
+        lambda path, model_root: [
+            FaceRecord(bbox=(0, 0, 1, 1), embedding=_unit([1, 0, 0]), det_score=0.9),
+            FaceRecord(bbox=(2, 2, 3, 3), embedding=_unit([0, 1, 0]), det_score=0.9),
+            FaceRecord(bbox=(4, 4, 5, 5), embedding=_unit([0, 0, 1]), det_score=0.9),
+        ],
+    )
+    asyncio.run(
+        worker_mod._process_one(
+            store, people, faces, "i1", media_root, tmp_path / "models"
+        )
+    )
+
+    item = store.get("i1")
+    assert len(item.person_ids) == 3
+    assert len(people) == 3
+
+    # Each person's photo count includes the group shot...
+    counts = store.counts_by_person()
+    for pid in item.person_ids:
+        assert counts[pid] == 1
+    # ...and searching by any one of them finds it.
+    for pid in item.person_ids:
+        person = people.get(pid)
+        people.rename(pid, f"Person {pid[:4]}")
+        page = store.list(q_person=f"Person {pid[:4]}", people=people)
+        assert [it.id for it in page.items] == ["i1"]
+        assert person is not None
