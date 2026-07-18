@@ -10,6 +10,10 @@ exclude = [
     "tests/manual/**",
     "src/malmberg.egg-info/**",
     "**/__pycache__/**",
+    # Claude Code agent worktrees are full nested checkouts (gitignored,
+    # registered as git worktrees); scanning them quadruples the obligation
+    # surface with findings for code that is not on this branch.
+    ".claude/**",
 ]
 
 [gates.severity]
