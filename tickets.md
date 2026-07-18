@@ -154,3 +154,87 @@ attachments: []
 acceptance: []
 threat: null
 ```
+
+<!-- ticket:T-0008 -->
+```yaml
+id: T-0008
+title: 'strata pilot: design/malmberg.strata self-model with sys plan/doc/audit'
+state: done
+kind: feature
+origin: agent
+created: '2026-07-18'
+blocked_by: []
+parent: null
+scope:
+- design/**
+- src/malmberg_server/ingest/upload.py
+- src/malmberg_server/ingest/thumbs.py
+- src/malmberg_core/provision.py
+- src/malmberg_server/setup/__init__.py
+- frob.toml
+- tickets.md
+- docs/design/README.md
+evidence:
+- tests/integration/test_ingest_integration.py::test_handle_upload_png
+- tests/unit/server/test_setup.py::test_step_hardware_writes_toml
+attachments: []
+acceptance: []
+threat: null
+```
+Model the real malmberg architecture (server/display/core/ingest/cloud/faces/backup nodes, real import and data flows, upload+cloud endorsement boundaries) in design/malmberg.strata and drive frob sys audit to PROVED or honest named gaps.
+
+## Done report
+
+design/malmberg.strata models the system as built: 11 nodes (phone and
+cloudsvc foreign; core, server_api, ingest, cloudsync, faces, backup,
+provisioning, display trusted with tier-2 code globs covering all of
+src/; media_store as a zfs-engine store), 25 flows (every cross-package
+import edge verified by grep, plus the upload, cloud-sync, serving,
+snapshot, and control-proxy data paths), 2 endorsement boundaries
+(b_upload_endorse at ingest/upload.py::_finalize_staged,
+b_cloud_endorse at ingest/upload.py::ingest_bytes -- both anchored with
+frob:boundary comments), and 9 claims (4 proved: reach phone->
+media_store, reach cloudsvc->display, noflow phone->media_store, noflow
+cloudsvc->media_store; 5 assumed CWE-78 discharges with owner+review,
+each stating the real fixed-argv reason).
+
+`frob sys audit`: PROVED, zero gaps across all 9 views
+(security:owasp-top-10, 3 quality baselines, 4 compliance regs,
+pii:model) and self-conformance PROVED (SYS100/101/102 clean).
+`frob sys plan`: 0 obligation tickets (nothing unrefined/refuted/
+unbound). `frob sys doc`: CWE-78 row PROVED (L4), all other applicable
+rows honestly not-applicable or phase-A not-evaluated.
+
+Honest limitations, recorded rather than hidden: (1) core genuinely does
+UDP-broadcast networking but `may "net"` is undeclared because the
+capability scanner cannot observe asyncio datagram endpoints (SYS101
+would flag an unfalsifiable claim); (2) the model declares no PII yet --
+malmberg stores family photos, face embeddings, and GPS-derived places,
+so a std.pii `carries`/retention/revocation pass is queued as T-0009;
+(3) two scanner false positives were fixed at the source instead of
+being declared as phantom capabilities (write_exec -> write_executable
+rename; thumbs.py docstring reword).
+
+Verified: uv run pytest tests/unit/server/test_setup.py test_ingest.py
+test_thumbs.py tests/unit/core (96 passed) and
+tests/integration/test_ingest_integration.py (12 passed); ruff check and
+format clean on every touched file.
+
+<!-- ticket:T-0009 -->
+```yaml
+id: T-0009
+title: 'strata: declare std.pii carries tags and retention/revocation for media_store'
+state: queued
+kind: security
+origin: agent
+created: '2026-07-18'
+blocked_by: []
+parent: null
+scope:
+- design/**
+evidence: []
+attachments: []
+acceptance: []
+threat: info-disclosure
+```
+design/malmberg.strata currently declares zero PII, but malmberg stores family photos, face embeddings (faces/), and GPS-derived places (ingest/gazetteer) -- personal data under any reading. Follow-up: add carries tags to media_store (and faces state), a retention bound or revocation-edge flow (the dashboard hard-delete path), and discharge the resulting PII002-004 obligations honestly. Blocked on verifying the carries/retention surface grammar against the shipped strata-core.

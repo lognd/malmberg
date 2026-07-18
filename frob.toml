@@ -37,3 +37,12 @@ language = "python"
 command = ["uv", "run", "pytest", "-q", "{ids}"]
 all_command = ["uv", "run", "pytest", "-n", "auto", "-q"]
 cwd = "."
+
+[[test.runner]]
+# Design-model "tests": a touched .strata file re-proves the model via
+# sys audit. The {ids} placeholder is mandatory for every runner entry
+# (BadRunnerSpec otherwise); sys audit tolerates the appended ids.
+language = "strata"
+command = ["frob", "sys", "audit", "{ids}"]
+all_command = ["frob", "sys", "audit"]
+cwd = "."
