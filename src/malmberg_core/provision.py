@@ -104,7 +104,7 @@ def has_cmd(cmd: str) -> bool:
     return subprocess.run(["which", cmd], capture_output=True).returncode == 0
 
 
-def write_exec(path: Path, content: str) -> None:
+def write_executable(path: Path, content: str) -> None:
     """Write an executable script to *path* (mode 0755)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
@@ -168,7 +168,7 @@ def install_github_autoupdate(
             check=False,
         )
         extras_str = "".join(f"--extra {e} " for e in extras)
-        write_exec(
+        write_executable(
             _UPDATE_SCRIPT,
             _UPDATE_SCRIPT_TEMPLATE.format(
                 repo_dir=repo_dir,

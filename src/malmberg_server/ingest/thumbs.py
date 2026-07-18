@@ -24,7 +24,7 @@ from malmberg_server.ingest.store import MediaStore
 _log = get_logger(__name__)
 
 WARM_SIZES: tuple[int, ...] = (200, 400)
-"""Thumbnail sizes to pre-generate, matching what the dashboard requests.
+"""Thumbnail sizes to pre-generate, matching what the dashboard asks for.
 
 400 is the browse grid's default and the face-review card; 200 is the people
 cards and the frame preview strip. The larger sizes (the 1200 face zoom) stay

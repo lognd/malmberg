@@ -49,7 +49,7 @@ from malmberg_core.provision import (
     has_cmd as _has_cmd,
 )
 from malmberg_core.provision import (
-    write_exec as _write_exec,
+    write_executable as _write_executable,
 )
 
 _log = get_logger(__name__)
@@ -635,7 +635,7 @@ def _step_esp_mirror(dry: bool, warnings: list[str]) -> str:
     script = _ESP_SYNC_SCRIPT_BODY.format(esp_guid=_ESP_TYPE_GUID)
     _log.info("Installing EFI mirror timer (%s).", _ESP_SYNC_TIMER)
     if not dry:
-        _write_exec(_ESP_SYNC_SCRIPT, script)
+        _write_executable(_ESP_SYNC_SCRIPT, script)
         _ESP_SYNC_SERVICE.write_text(
             _ESP_SYNC_SERVICE_BODY.format(script=_ESP_SYNC_SCRIPT)
         )
