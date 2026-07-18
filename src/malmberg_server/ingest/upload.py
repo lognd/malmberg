@@ -65,6 +65,7 @@ async def handle_upload(
     return _finalize_staged(staging, file.filename, sha.hexdigest(), store, media_root)
 
 
+# frob:boundary b_cloud_endorse
 def ingest_bytes(
     data: bytes,
     filename: str,
@@ -94,6 +95,7 @@ def ingest_bytes(
     return _finalize_staged(staging, filename, digest, store, media_root)
 
 
+# frob:boundary b_upload_endorse
 def _finalize_staged(
     staging: Path,
     filename: str,

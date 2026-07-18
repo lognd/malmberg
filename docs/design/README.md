@@ -19,3 +19,10 @@ system. Each file covers one concern.
 | [privacy.md](privacy.md) | Optional privacy filter (opt-in, local-only) |
 | [dashboard.md](dashboard.md) | HTMX web dashboard pages |
 | [reference.md](reference.md) | Technology reference, coding standards, module ownership |
+
+The prose above is complemented by a machine-checked model:
+`design/malmberg.strata` (repo root) declares the real components, code
+bindings, capabilities, data flows, trust boundaries, and claims, and is
+verified by `frob sys audit` (see docs/software/testing.md for the gate
+suite). The two ingress endorsement boundaries it declares are anchored
+in code at `malmberg_server/ingest/upload.py` (`frob:boundary` comments).

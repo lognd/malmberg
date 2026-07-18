@@ -1,0 +1,308 @@
+// malmberg.strata -- malmberg's architecture, modeled as enforced truth.
+//
+// Every node binds the code that is actually on this branch (tier-2
+// `code=` globs over src/), every `may` capability names an effect that
+// was verified against real call sites before being declared (os.execv in
+// api/routes.py::_schedule_self_restart, subprocess in backup/zfs.py,
+// hal/detect.py, provision.py and both setup packages, httpx in the
+// display client and the server's control proxy, UDP broadcast in
+// core.networking), and every flow is either a real cross-package import
+// edge (verified by grepping `from malmberg_*` across src/) or a real
+// runtime data path (uploads, cloud sync, media serving, ZFS snapshots).
+//
+// The two foreign nodes are the two places untrusted bytes enter the
+// system: LAN clients (phones/browsers uploading and browsing) and the
+// cloud photo providers (iCloud / Google Photos). Both ingress paths are
+// endorsed by the SAME validation tail -- ingest/upload.py hashes,
+// dedup-checks and EXIF-validates staged bytes before anything is moved
+// into the media store (cloud/sync.py deliberately routes downloads
+// through ingest_bytes for exactly this reason; see its module docstring).
+
+// frob:ticket T-0008
+// frob:doc docs/design/overview.md#1-system-summary
+module malmberg
+
+// -- foreign nodes -----------------------------------------------------
+
+// Phones and browsers on the LAN: upload photos, browse the dashboard,
+// and drive slideshow controls. Untrusted input surface number one.
+// frob:doc docs/design/overview.md#1-system-summary
+node phone : foreign { clearance Public; }
+
+// iCloud / Google Photos: the cloud providers `malmberg_server.cloud`
+// syncs from (and verifies against before deleting). Untrusted input
+// surface number two.
+// frob:doc docs/design/overview.md#1-system-summary
+node cloudsvc : foreign { clearance Public; }
+
+// -- trusted components ------------------------------------------------
+
+// Shared primitives used by both roles: models, logging, HAL, UDP
+// discovery helpers, provisioning shared bits. `exec` is real
+// (provision.py and hal/detect.py spawn subprocesses), `fs` is the
+// logging setup. NOTE: core genuinely does UDP-broadcast networking
+// (networking/util.py, via asyncio's create_datagram_endpoint), but the
+// capability scanner has no needle for datagram endpoints, so a `may
+// "net"` here is SYS101-unfalsifiable today -- deliberately undeclared
+// until the scanner can observe it (filed as a frob scanner gap).
+// frob:doc docs/design/overview.md#2-package-structure
+node core : trusted {
+    clearance Internal;
+    code "src/malmberg_core/**";
+    may "exec";
+    may "fs";
+}
+
+// The FastAPI server app + routes (api/ and app/, plus the package
+// entrypoints). `exec` is api/routes.py::_schedule_self_restart's
+// os.execv re-exec and version.py's subprocess; `net` is the httpx
+// control proxy to the paired display (routes.py, URL comes from
+// MALMBERG_DISPLAY_URL config, never from client input); `fs` is media
+// and index file serving.
+// frob:doc docs/design/server.md#53-file-api
+node server_api : trusted {
+    clearance Internal;
+    code "src/malmberg_server/api/**" "src/malmberg_server/app/**"
+        "src/malmberg_server/__main__.py" "src/malmberg_server/__init__.py"
+        "src/malmberg_server/version.py";
+    may "env";
+    may "exec";
+    may "fs";
+    may "net";
+}
+
+// The ingest pipeline: staging, hash/dedup, EXIF extraction, gazetteer
+// geocoding, thumbnails, the media index. Pure filesystem work.
+// frob:doc docs/design/server.md#52-file-ingest
+node ingest : trusted {
+    clearance Internal;
+    code "src/malmberg_server/ingest/**";
+    may "fs";
+}
+
+// Cloud sync workers: fetch media from the providers, hand every byte to
+// ingest_bytes, verify checksums before remote deletion. `net` is the
+// provider SDK / httpx traffic, `fs` is the download staging.
+// frob:doc docs/design/overview.md#1-system-summary
+node cloudsync : trusted {
+    clearance Internal;
+    code "src/malmberg_server/cloud/**";
+    may "env";
+    may "net";
+    may "fs";
+}
+
+// Face detection/clustering worker (insightface/onnx, optional extra).
+// Reads media files, writes the people index.
+// frob:doc docs/design/privacy.md#privacy-filter-optional-strictly-opt-in
+node faces : trusted {
+    clearance Internal;
+    code "src/malmberg_server/faces/**";
+    may "fs";
+}
+
+// ZFS snapshot/retention logic. `exec` is the zfs/zpool subprocess argv
+// (fixed command tables in backup/zfs.py), `fs` is audit bookkeeping.
+// frob:doc docs/design/backup.md#backup-retention-circular-buffer-with-exponential-backoff
+node backup : trusted {
+    clearance Internal;
+    code "src/malmberg_server/backup/**";
+    may "exec";
+    may "fs";
+}
+
+// The idempotent Ubuntu provisioning script for the server role. Runs as
+// root at setup time only; spawns systemctl/apt/openssl subprocesses.
+// frob:doc docs/design/server.md#51-provisioning-script-malmberg_serversetup
+node provisioning : trusted {
+    clearance Internal;
+    code "src/malmberg_server/setup/**";
+    may "exec";
+    may "fs";
+}
+
+// The display role in its entirety: slideshow engine, producers,
+// renderers (pygame/mpv), pairing, its own FastAPI control surface, and
+// its provisioning script. `net` is the httpx pull loop against the
+// server plus UDP discovery; `exec` is mpv/setup subprocesses.
+// frob:doc docs/design/display.md#62-slideshow-engine
+node display : trusted {
+    clearance Internal;
+    code "src/malmberg_display/**";
+    may "env";
+    may "exec";
+    may "fs";
+    may "net";
+}
+
+// The date-partitioned media tree plus its JSON indexes on the ZFS
+// dataset (docs/design/architecture.md 3.4). Not append-only: trash
+// purges and hard deletes are part of the design.
+// frob:doc docs/design/architecture.md#34-storage-layout-on-server
+store media_store : trusted {
+    clearance Internal;
+    engine zfs;
+}
+
+// -- flows: ingress/egress data paths ---------------------------------
+
+// Uploads plus dashboard/control requests from LAN clients.
+// frob:doc docs/design/dashboard.md#web-dashboard
+flow f_upload : phone -> server_api { label Public; }
+// Dashboard pages, thumbnails and full media served back to LAN clients.
+// frob:doc docs/design/dashboard.md#web-dashboard
+flow f_serve_phone : server_api -> phone { label Public; }
+
+// Media bytes fetched from the cloud providers.
+// frob:doc docs/design/overview.md#1-system-summary
+flow f_cloud_fetch : cloudsvc -> cloudsync { label Public; }
+// Checksum-verified deletion requests back to the providers
+// (cloud/verify_and_delete.py) -- the only trusted->cloud egress.
+// frob:doc docs/design/overview.md#1-system-summary
+flow f_cloud_delete : cloudsync -> cloudsvc { label Public; }
+
+// Validated media moved from staging into the store, index updates.
+// frob:doc docs/design/server.md#52-file-ingest
+flow f_ingest_write : ingest -> media_store { label Internal; }
+// Media/index reads for serving the API and dashboard.
+// frob:doc docs/design/server.md#53-file-api
+flow f_store_serve : media_store -> server_api { label Internal; }
+// Face worker reads media files for detection.
+// frob:doc docs/design/privacy.md#privacy-filter-optional-strictly-opt-in
+flow f_store_faces : media_store -> faces { label Internal; }
+// ZFS snapshots read the dataset the store lives on.
+// frob:doc docs/design/backup.md#backup-transfer
+flow f_backup_snap : media_store -> backup { label Internal; }
+
+// Control proxy: the server forwards next/pause/restart commands to the
+// paired display (routes.py, MALMBERG_DISPLAY_URL).
+// frob:doc docs/design/handshake.md#server-display-handshake-protocol
+flow f_control : server_api -> display { label Internal; }
+
+// -- flows: real import edges (src imports dst) ------------------------
+
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_display_core : display -> core { label Internal; }
+// display imports malmberg_server.api.web::render_dashboard_html AND
+// pulls media/playlists from the server over HTTPS -- one edge, both
+// facts real (the import is an acknowledged layering smell, modeled
+// honestly rather than hidden).
+// frob:doc docs/design/handshake.md#handshake-mutual-https
+flow f_display_server : display -> server_api { label Internal; }
+
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_api_core : server_api -> core { label Internal; }
+// frob:doc docs/design/server.md#52-file-ingest
+flow f_api_ingest : server_api -> ingest { label Internal; }
+// frob:doc docs/design/overview.md#1-system-summary
+flow f_api_cloudsync : server_api -> cloudsync { label Internal; }
+// frob:doc docs/design/privacy.md#privacy-filter-optional-strictly-opt-in
+flow f_api_faces : server_api -> faces { label Internal; }
+
+// cloud/ imports ServerConfig from app/ (config access, not a data path).
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_cloudsync_api : cloudsync -> server_api { label Internal; }
+// Downloads are routed through ingest_bytes -- the deliberate shared
+// validation tail (cloud/sync.py module docstring).
+// frob:doc docs/design/server.md#52-file-ingest
+flow f_cloudsync_ingest : cloudsync -> ingest { label Internal; }
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_cloudsync_core : cloudsync -> core { label Internal; }
+
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_faces_ingest : faces -> ingest { label Internal; }
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_faces_core : faces -> core { label Internal; }
+// ingest imports faces (index types) -- bidirectional with the above.
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_ingest_faces : ingest -> faces { label Internal; }
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_ingest_core : ingest -> core { label Internal; }
+
+// frob:doc docs/design/overview.md#2-package-structure
+flow f_backup_core : backup -> core { label Internal; }
+// frob:doc docs/design/server.md#51-provisioning-script-malmberg_serversetup
+flow f_prov_backup : provisioning -> backup { label Internal; }
+// frob:doc docs/design/server.md#51-provisioning-script-malmberg_serversetup
+flow f_prov_core : provisioning -> core { label Internal; }
+
+// -- boundaries --------------------------------------------------------
+
+// Uploaded bytes become trusted only after ingest's validation tail
+// (hash, dedup, EXIF parse, staged rename into media_root) -- anchored at
+// ingest/upload.py::_finalize_staged. Delete that validation and
+// c_no_raw_upload_media below must flip to REFUTED.
+// frob:doc docs/design/server.md#52-file-ingest
+boundary b_upload_endorse endorse f_upload : foreign -> trusted when "staged_validated"
+
+// Cloud downloads pass through the SAME validation tail via ingest_bytes
+// (anchored at ingest/upload.py::ingest_bytes); additionally
+// verify_and_delete re-hashes the local copy before any remote delete.
+// frob:doc docs/design/server.md#52-file-ingest
+boundary b_cloud_endorse endorse f_cloud_fetch : foreign -> trusted when "ingest_validated"
+
+// -- claims ------------------------------------------------------------
+
+// The upload pipeline is actually connected end to end: phone ->
+// server_api -> ingest -> media_store. Sanity check that the model has
+// not drawn ingest as a dead end.
+// frob:doc docs/design/server.md#52-file-ingest
+assert c_upload_reaches_store reach phone -> media_store
+
+// Cloud photos can actually reach a screen: cloudsvc -> cloudsync ->
+// ingest -> media_store -> server_api -> display. This is the product.
+// frob:doc docs/design/overview.md#1-system-summary
+assert c_cloud_reaches_display reach cloudsvc -> display
+
+// No raw (unvalidated) upload bytes ever land in the media store: proves
+// only because b_upload_endorse stops the taint closure at the
+// phone -> server_api hop.
+// frob:doc docs/design/server.md#52-file-ingest
+assert c_no_raw_upload_media noflow phone -> media_store
+
+// No raw cloud provider bytes ever land in the media store: proves only
+// because b_cloud_endorse stops the taint closure at the
+// cloudsvc -> cloudsync hop.
+// frob:doc docs/design/server.md#52-file-ingest
+assert c_no_raw_cloud_media noflow cloudsvc -> media_store
+
+// -- capability discharge claims (THREAT003, CWE-78) -------------------
+//
+// Declaring `may "exec"` (measured honestly against real subprocess /
+// os.execv sites) drags in one OS-command-injection discharge obligation
+// per node. Each assume below states the SPECIFIC reason a human is
+// attesting no exploitable command injection exists -- fixed argv lists
+// throughout, never shell=True, never client-derived strings:
+//
+// server_api: the only exec sites are api/routes.py::
+// _schedule_self_restart's os.execv(sys.executable, [sys.executable,
+// "-m", module]) where module comes from the hardcoded _CONTROL_ROUTES
+// dispatch, and version.py's fixed git argv. Upload bytes and dashboard
+// parameters never reach either argv.
+// frob:doc docs/design/server.md#53-file-api
+assume "weakness:CWE-78:server_api" noflow phone -> server_api owner logan review "2026-10-15"
+
+// display: exec sites are the mpv player invocation (argv is the mpv
+// binary plus a LOCAL cache file path chosen by the producer, never a
+// server-supplied string) and setup's fixed systemctl/apt argv lists.
+// frob:doc docs/design/display.md#62-slideshow-engine
+assume "weakness:CWE-78:display" noflow phone -> display owner logan review "2026-10-15"
+
+// backup: every subprocess call in backup/zfs.py is a fixed
+// zfs/zpool argv table parameterized only by config-derived dataset
+// names; media file CONTENT is snapshotted by the filesystem, never
+// interpolated into a command line.
+// frob:doc docs/design/backup.md#backup-transfer
+assume "weakness:CWE-78:backup" noflow phone -> backup owner logan review "2026-10-15"
+
+// core: provision.py and hal/detect.py spawn fixed argv
+// (git/systemctl/cat) built from repo config; no request-derived data
+// exists in this package at all.
+// frob:doc docs/design/overview.md#2-package-structure
+assume "weakness:CWE-78:core" noflow phone -> core owner logan review "2026-10-15"
+
+// provisioning: root-run setup steps use fixed apt/systemctl/openssl
+// argv lists; runs interactively at install time, before any client
+// traffic exists.
+// frob:doc docs/design/server.md#51-provisioning-script-malmberg_serversetup
+assume "weakness:CWE-78:provisioning" noflow phone -> provisioning owner logan review "2026-10-15"
