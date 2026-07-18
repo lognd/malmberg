@@ -36,8 +36,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MEDIA_EXTS = {
-    ".jpg", ".jpeg", ".png", ".heic", ".heif", ".avif", ".tif", ".tiff",
-    ".webp", ".gif", ".bmp", ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".avi",
+    ".mkv",
+    ".webm",
 }
 
 
@@ -148,7 +163,9 @@ def detect_types(media_files: list[Path]) -> dict[Path, str]:
     return out
 
 
-def rename_mismatched(media_files: list[Path], *, dry_run: bool) -> tuple[list[Path], int]:
+def rename_mismatched(
+    media_files: list[Path], *, dry_run: bool
+) -> tuple[list[Path], int]:
     """Rename files whose extension lies about their contents.
 
     Google re-encodes some photos to JPEG but keeps the original ``.HEIC``
@@ -228,8 +245,7 @@ def main() -> int:
         return 1
 
     media_files = [
-        p for p in root.rglob("*")
-        if p.is_file() and p.suffix.lower() in MEDIA_EXTS
+        p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in MEDIA_EXTS
     ]
     print(f"Found {len(media_files)} media file(s) under {root}")
     if not media_files:

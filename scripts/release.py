@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Bump patch version, build, and publish to PyPI."""
 
-import os
 import re
 import subprocess
 import sys
