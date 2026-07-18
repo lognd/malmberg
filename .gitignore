@@ -42,5 +42,8 @@ Thumbs.db
 FROBLEMS.md
 .env
 
+# frob local state
+.frob/
+
 # Manual test runner outputs
 tests/manual/logs/

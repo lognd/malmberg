@@ -1,0 +1,35 @@
+# check_base lives in pyproject.toml's [tool.frob] table (that's the file
+# frob.app.config.AppConfig.from_external actually reads scalar CLI
+# defaults from); this frob.toml carries the [graph]/[gates]/[testing]/
+# [[test.runner]] tables, which are read directly from this file.
+
+[graph]
+# tests/manual/** are manual/interactive fixtures, not automated obligation
+# surface. egg-info and __pycache__ are build artifacts.
+exclude = [
+    "tests/manual/**",
+    "src/malmberg.egg-info/**",
+    "**/__pycache__/**",
+]
+
+[gates.severity]
+# Legacy-adoption baseline: snapshot-wide obligations warn on the
+# un-annotated legacy surface while annotation coverage grows; diff-scoped
+# and drift rules stay hard errors. Raise these back to "error" as
+# annotation coverage grows.
+COV001 = "warn"
+TEST001 = "warn"
+TEST002 = "warn"
+TEST003 = "warn"
+TEST005 = "warn"
+TEST006 = "warn"
+
+[testing]
+min_unit_cases = 1
+min_integration = 1
+
+[[test.runner]]
+language = "python"
+command = ["uv", "run", "pytest", "-q", "{ids}"]
+all_command = ["uv", "run", "pytest", "-n", "auto", "-q"]
+cwd = "."

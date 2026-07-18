@@ -87,6 +87,9 @@ dev = [
     "ty>=0.0.1a8",
 ]
 
+[tool.frob]
+check_base = "main"
+
 [tool.setuptools]
 packages = { find = { where = ["src"] } }
 
