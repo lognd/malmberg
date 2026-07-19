@@ -67,12 +67,25 @@ uv sync --extra display --extra web-overlays     # add playwright clock/weather 
 
 ```bash
 sudo apt install zfsutils-linux   # optional but strongly recommended
-sudo uv run python -m malmberg_server setup
+sudo uv run python -m malmberg_server setup   # OS bits: ZFS dataset, TLS cert, cron
+sudo bash deploy/install.sh                   # isolated service users + hardened units
 ```
 
-Creates the `malmberg` system user, `/fs` directory layout, `tank/malmberg` ZFS
-dataset, a self-signed TLS certificate, a systemd service, and two cron jobs
-(trash purge + ZFS backup). Prints a 6-digit pairing PIN when done.
+`malmberg_server setup` provisions the host-level bits: the `/fs` directory
+layout, the `tank/malmberg` ZFS dataset, a self-signed TLS certificate, and two
+cron jobs (trash purge + ZFS backup). It prints a 6-digit pairing PIN when done.
+
+`deploy/install.sh` is **generated** from the enforced design model
+(`design/malmberg.strata`) by `frob deploy generate` and provisions the
+security-critical layer: a dedicated, non-login system user per service
+(`malmberg-api`, `malmberg-ingest`, `malmberg-cloudsync`, `malmberg-faces`,
+`malmberg-backup`), a hardened systemd unit each (`NoNewPrivileges`,
+`ProtectSystem=strict`, a capability-scoped `SystemCallFilter`), and each
+service's owned directories with the exact mode the model declares. The
+PII-bearing media tree (`/srv/malmberg/media`) is owned WRITABLY only by
+`malmberg-ingest`, so a compromise of any other service user cannot write it.
+The script is idempotent and safe to re-run. Regenerate after any design change
+and verify it in CI with `make deploy-check`; never hand-edit it.
 
 ### Display (Raspberry Pi, Raspbian Bookworm)
 

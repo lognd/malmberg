@@ -238,3 +238,25 @@ acceptance: []
 threat: info-disclosure
 ```
 design/malmberg.strata currently declares zero PII, but malmberg stores family photos, face embeddings (faces/), and GPS-derived places (ingest/gazetteer) -- personal data under any reading. Follow-up: add carries tags to media_store (and faces state), a retention bound or revocation-edge flow (the dashboard hard-delete path), and discharge the resulting PII002-004 obligations honestly. Blocked on verifying the carries/retention surface grammar against the shipped strata-core.
+
+<!-- ticket:T-0010 -->
+```yaml
+id: T-0010
+title: Defer service-user/unit creation from malmberg_server setup to generated deploy/install.sh
+state: queued
+kind: feature
+origin: agent
+created: '2026-07-18'
+blocked_by: []
+parent: null
+scope:
+- src/malmberg_server/setup/**
+evidence: []
+attachments: []
+acceptance:
+- given a fresh Ubuntu host, when the operator runs malmberg_server setup then deploy/install.sh,
+  then exactly the six isolated service users and hardened units from design/malmberg.strata
+  exist and no single 'malmberg' catch-all user is created
+threat: null
+```
+T-0260 pilot added std.host to design/malmberg.strata and a generated, isolation-proven deploy/install.sh (six dedicated service users, hardened units, single-writer media_store ownership). The legacy malmberg_server/setup still creates one catch-all 'malmberg' user + a single unit, which overlaps and defeats the isolation. Refactor setup to provision only the OS bits (ZFS dataset, TLS cert, cron) and delegate all user/unit/dir creation to deploy/install.sh. Update tests.

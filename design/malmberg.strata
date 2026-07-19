@@ -22,6 +22,26 @@
 // frob:doc docs/design/overview.md#1-system-summary
 module malmberg
 
+// -- std.host deployment model (T-0260, deploy epic T-0254) -------------
+//
+// Every long-running malmberg service gets a DEDICATED, non-login system
+// user (`runs_as`) and a hardened systemd `unit`, so a red-team
+// compromise of one service is provably contained to that user's owned
+// paths. The PII-bearing surface is the media store: it is owned WRITABLY
+// by exactly one user -- `malmberg-ingest`, the sole writer of validated
+// media -- and never by the API (which only serves it), the face worker
+// or the backup worker (which only read it). Cross-service READ access to
+// the media tree is granted out-of-band via a shared unix group, which
+// `std.host` has no vocabulary for (T-draft-7b5b5541); that structural
+// blind spot is the HOST001 `shared-group` / HOST002 `sudoers` honest gap
+// waived per pair/user at the bottom of this file, never silently assumed
+// safe. `owns` paths are disjoint across users by construction, so
+// HOST001 `shared-writable-path` and `cross-user-socket` PROVE clean.
+//
+// The server role and the display role run on SEPARATE hosts; the service
+// users are modeled in one graph but provisioned by the two role-specific
+// install scripts `frob deploy generate` emits.
+
 // -- foreign nodes -----------------------------------------------------
 
 // Phones and browsers on the LAN: upload photos, browse the dashboard,
@@ -69,6 +89,15 @@ node server_api : trusted {
     may "exec";
     may "fs";
     may "net";
+    runs_as "malmberg-api";
+    unit;
+    owns "/var/lib/malmberg/api" "0750";
+    listens 8000;
+    // Honest-gap discharges (std.host has no group/sudoers vocabulary,
+    // T-draft-7b5b5541). malmberg-api sorts first, so it is the canonical
+    // waiver owner for every HOST001 pair it participates in.
+    waive "HOST001:shared-group" reason "malmberg-api shares only a read-only media group with the ingest owner; it is in no group that grants write to another service user's paths";
+    waive "HOST002:sudoers" reason "malmberg-api runs as a non-login system user with no sudoers grant; the unit sets NoNewPrivileges";
 }
 
 // The ingest pipeline: staging, hash/dedup, EXIF extraction, gazetteer
@@ -78,6 +107,13 @@ node ingest : trusted {
     clearance Internal;
     code "src/malmberg_server/ingest/**";
     may "fs";
+    runs_as "malmberg-ingest";
+    unit;
+    owns "/var/lib/malmberg/staging" "0750";
+    // malmberg-ingest sorts last, so it is never a HOST001 pair's canonical
+    // (earlier) owner -- no shared-group waiver is attributed to it. Its
+    // per-user HOST002 sudoers gap still needs discharging.
+    waive "HOST002:sudoers" reason "malmberg-ingest runs as a non-login system user with no sudoers grant; the unit sets NoNewPrivileges";
 }
 
 // Cloud sync workers: fetch media from the providers, hand every byte to
@@ -90,6 +126,11 @@ node cloudsync : trusted {
     may "env";
     may "net";
     may "fs";
+    runs_as "malmberg-cloudsync";
+    unit;
+    owns "/var/lib/malmberg/cloud-staging" "0750";
+    waive "HOST001:shared-group" reason "malmberg-cloudsync shares no write-granting group with another service user; its staging dir is private and downloads are handed to ingest in-process";
+    waive "HOST002:sudoers" reason "malmberg-cloudsync runs as a non-login system user with no sudoers grant; the unit sets NoNewPrivileges";
 }
 
 // Face detection/clustering worker (insightface/onnx, optional extra).
@@ -99,6 +140,11 @@ node faces : trusted {
     clearance Internal;
     code "src/malmberg_server/faces/**";
     may "fs";
+    runs_as "malmberg-faces";
+    unit;
+    owns "/var/lib/malmberg/faces" "0750";
+    waive "HOST001:shared-group" reason "malmberg-faces holds only read-only media-group membership; its people index is a private dir no other service user is grouped into";
+    waive "HOST002:sudoers" reason "malmberg-faces runs as a non-login system user with no sudoers grant; the unit sets NoNewPrivileges";
 }
 
 // ZFS snapshot/retention logic. `exec` is the zfs/zpool subprocess argv
@@ -109,6 +155,11 @@ node backup : trusted {
     code "src/malmberg_server/backup/**";
     may "exec";
     may "fs";
+    runs_as "malmberg-backup";
+    unit;
+    owns "/var/lib/malmberg/backup-audit" "0750";
+    waive "HOST001:shared-group" reason "malmberg-backup holds only read-only media-group membership for snapshotting; its audit dir is private";
+    waive "HOST002:sudoers" reason "malmberg-backup runs as a non-login system user with no sudoers grant; zfs delegation is via `zfs allow`, not sudo";
 }
 
 // The idempotent Ubuntu provisioning script for the server role. Runs as
@@ -133,6 +184,16 @@ node display : trusted {
     may "exec";
     may "fs";
     may "net";
+    runs_as "malmberg-display";
+    unit;
+    owns "/var/lib/malmberg-display" "0750";
+    listens 8001;
+    // The display runs on a SEPARATE host; shared-group/sudoers on the
+    // server host are vacuously satisfied for it, but the proof pairs it
+    // with the server users regardless (one graph), so it is discharged
+    // the same honest way.
+    waive "HOST001:shared-group" reason "malmberg-display runs on the display host, in no group shared with a server-host service user";
+    waive "HOST002:sudoers" reason "malmberg-display runs as a non-login system user with no sudoers grant; the unit sets NoNewPrivileges";
 }
 
 // The date-partitioned media tree plus its JSON indexes on the ZFS
@@ -142,6 +203,14 @@ node display : trusted {
 store media_store : trusted {
     clearance Internal;
     engine zfs;
+    // The PII-bearing surface. Owned WRITABLY by exactly one user --
+    // malmberg-ingest, the sole writer (f_ingest_write) -- so a compromise
+    // of the API, face or backup worker cannot write the media tree; they
+    // read it via a shared unix group (the std.host group blind spot,
+    // waived below). This single-writer ownership is what makes HOST001
+    // shared-writable-path PROVE clean.
+    runs_as "malmberg-ingest";
+    owns "/srv/malmberg/media" "0750";
 }
 
 // -- flows: ingress/egress data paths ---------------------------------

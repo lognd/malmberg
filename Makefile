@@ -1,4 +1,4 @@
-.PHONY: build clean check test lint fmt release map
+.PHONY: build clean check test lint fmt release map deploy deploy-check
 
 build:
 	uv sync --dev
@@ -26,3 +26,11 @@ map:
 
 release: check test
 	uv run python scripts/release.py
+
+# Regenerate deploy/{install,status,uninstall}.sh from design/malmberg.strata.
+deploy:
+	frob deploy generate .
+
+# CI gate: fail if the committed deploy scripts drift from the design model.
+deploy-check:
+	frob deploy generate . --check
